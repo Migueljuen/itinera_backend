@@ -1,21 +1,20 @@
 const express = require('express');
 const router = express.Router();
-const { upload, createExperience, getAllExperience, getExperienceById, updateExperience } = require('../controllers/experienceController.js');
+const { upload, createExperienceHandler, createExperience, getAllExperience, getExperienceById, updateExperience, saveExperience,getActiveExperience , getSavedExperiences, getExperienceByUserID} = require('../controllers/experienceController.js');
 // const authenticateToken = require('../middleware/auth');
 
 
-router.post('/create', createExperience);
+router.post('/create', createExperienceHandler);
+// router.post('/create', upload.array('image', 10), createExperience);
+router.post('/save', saveExperience);
+router.get('/saved/:user_id', getSavedExperiences);
+router.get('/user/:user_id', getExperienceByUserID);
 
 
-// Get all destination
 router.get('/', getAllExperience); 
-
-// Get destination by ID
-router.get('/:id', getExperienceById); 
-
-
-// ADD IMAGES
-
+router.get('/active', getActiveExperience);
 router.put('/:id', upload.array('images'), updateExperience);
+router.get('/:id', getExperienceById); // LAST!
+
 
 module.exports = router;

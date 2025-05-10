@@ -8,11 +8,11 @@ const path = require('path');
 // Middleware
 app.use(cors());
 app.use(express.json());
-
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // User
 const userRoutes = require('./routes/userRoutes');
 app.use('/users', userRoutes);
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 
 // Destination
 const destinationRoutes = require('./routes/destinationRoutes');
@@ -24,7 +24,7 @@ app.use('/experience', experienceRoutes);
 
 // Availability
 const availabilityRoutes = require('./routes/availabilityRoutes');
-app.use('/availability', availabilityRoutes);
+app.use('/experience/availability', availabilityRoutes);
 
 // Tags
 const tagRoutes = require('./routes/tagRoutes');

@@ -1,3 +1,4 @@
+//authController.js
 require('dotenv').config(); // Load environment variables
 
 const jwt = require('jsonwebtoken');

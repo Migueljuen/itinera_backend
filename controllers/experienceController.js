@@ -5,16 +5,12 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-
 const storage = multer.diskStorage({
-  destination: function(req, file, cb) {
-    // Make sure this directory exists
-    cb(null, path.join(__dirname, 'uploads/experiences'));
+  destination: function (req, file, cb) {
+    cb(null, path.resolve('uploads/experiences')); // Correct relative to project root
   },
-  filename: function(req, file, cb) {
-    // Create unique filename with timestamp
+  filename: function (req, file, cb) {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    // Get file extension
     const ext = path.extname(file.originalname);
     cb(null, uniqueSuffix + ext);
   }
@@ -23,7 +19,7 @@ const storage = multer.diskStorage({
 const upload = multer({ 
   storage: storage,
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
+    fileSize: 10 * 1024 * 1024, // 5MB limit
   },
   fileFilter: (req, file, cb) => {
     // Accept only images
@@ -34,18 +30,22 @@ const upload = multer({
     }
   }
 });
+
 const createExperience = async (req, res) => {
   // Extract destination and experience data from request body
   const { 
     // Experience data
-    creator_id, title, description, price, unit, availability, tags,
-    
+    creator_id, title, description, price, unit, availability, tags, status, // <-- added status
+
     // Destination data
     destination_name, city, destination_description, latitude, longitude,
-    
+
     // Option to use existing destination
     destination_id
   } = req.body;
+
+  // Get uploaded files if any
+  const files = req.files;
 
   // Begin transaction for atomicity
   const connection = await db.getConnection();
@@ -65,35 +65,60 @@ const createExperience = async (req, res) => {
       return res.status(400).json({ message: 'Invalid unit type' });
     }
 
-    // Validate availability data
-    if (!availability || !Array.isArray(availability) || availability.length === 0) {
+    // Validate 'status' value if provided
+    const validStatuses = ['draft', 'inactive', 'active'];
+    const experienceStatus = status || 'draft';
+    if (!validStatuses.includes(experienceStatus)) {
       await connection.rollback();
-      return res.status(400).json({ message: 'Availability information is required' });
+      return res.status(400).json({ message: 'Invalid status value' });
     }
 
-    // Validate each availability entry
-    const validDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    for (const slot of availability) {
-      if (!validDays.includes(slot.day_of_week) || !slot.start_time || !slot.end_time) {
-        await connection.rollback();
-        return res.status(400).json({ message: 'Each availability entry must have a valid day, start time, and end time' });
-      }
-    }
+// Validate availability data
+if (!availability || (typeof availability === 'string' && !availability.trim()) || (Array.isArray(availability) && availability.length === 0)) {
+  await connection.rollback();
+  return res.status(400).json({ message: 'Availability information is required' });
+}
 
-    // Validate tags
-    if (!tags || !Array.isArray(tags) || tags.length === 0) {
-      await connection.rollback();
-      return res.status(400).json({ message: 'At least one tag is required' });
-    }
+let parsedAvailability;
+try {
+  // Parse availability if it's a string
+  parsedAvailability = typeof availability === 'string' ? JSON.parse(availability) : availability;
+} catch (e) {
+  await connection.rollback();
+  return res.status(400).json({ message: 'Invalid availability format' });
+}
+
+// Validate each availability entry
+const validDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+for (const slot of parsedAvailability) {
+  if (!validDays.includes(slot.day_of_week) || !slot.start_time || !slot.end_time) {
+    await connection.rollback();
+    return res.status(400).json({ message: 'Each availability entry must have a valid day, start time, and end time' });
+  }
+}
+
+console.log("Tags before parsing:", tags);
+let parsedTags;
+try {
+  // Parse tags if they are sent as a string
+  parsedTags = typeof tags === 'string' ? JSON.parse(tags) : tags;
+} catch (e) {
+  await connection.rollback();
+  return res.status(400).json({ message: 'Invalid tags format' });
+}
+
+if (!parsedTags || !Array.isArray(parsedTags) || parsedTags.length === 0) {
+  await connection.rollback();
+  return res.status(400).json({ message: 'At least one tag is required' });
+}
+console.log("Tags before checking:", parsedTags);
 
     // Check if creator_id exists and has role 'Creator'
     const [user] = await connection.query('SELECT role FROM users WHERE user_id = ?', [creator_id]);
-    
     if (user.length === 0) {
       await connection.rollback();
       return res.status(404).json({ message: 'Creator not found' });
     }
-
     if (user[0].role !== 'Creator') {
       await connection.rollback();
       return res.status(403).json({ message: 'User must have role "Creator" to create an experience' });
@@ -102,69 +127,59 @@ const createExperience = async (req, res) => {
     // Verify that all tag IDs exist
     const [existingTags] = await connection.query(
       'SELECT tag_id FROM tags WHERE tag_id IN (?)',
-      [tags]
+      [parsedTags]
     );
-
-    if (existingTags.length !== tags.length) {
+    if (existingTags.length !== parsedTags.length) {
       await connection.rollback();
       return res.status(400).json({ message: 'One or more tag IDs do not exist' });
     }
+    
 
     // Handle destination - either use existing one or create new one
     let finalDestinationId;
 
     if (destination_id) {
-      // Use existing destination if ID provided
       const [destinationCheck] = await connection.query(
         'SELECT destination_id FROM destination WHERE destination_id = ?',
         [destination_id]
       );
-      
       if (destinationCheck.length === 0) {
         await connection.rollback();
         return res.status(404).json({ message: 'Specified destination does not exist' });
       }
-      
       finalDestinationId = destination_id;
     } else {
-      // Create new destination if no ID provided
       if (!destination_name || !city || !destination_description || !latitude || !longitude) {
         await connection.rollback();
         return res.status(400).json({ message: 'All destination fields are required when creating a new destination' });
       }
-      
-      // Check if destination already exists
       const [existingDestination] = await connection.query(
         'SELECT destination_id FROM destination WHERE name = ? AND city = ?', 
         [destination_name, city]
       );
-      
       if (existingDestination.length > 0) {
-        // Use existing destination if found
         finalDestinationId = existingDestination[0].destination_id;
       } else {
-        // Create new destination
         const [newDestination] = await connection.query(
           'INSERT INTO destination (name, city, description, latitude, longitude) VALUES (?, ?, ?, ?, ?)',
           [destination_name, city, destination_description, latitude, longitude]
         );
-        
         finalDestinationId = newDestination.insertId;
       }
     }
 
-    // Insert new experience with the destination ID
+    // Insert new experience with status
     const [result] = await connection.query(
       `INSERT INTO experience 
-      (creator_id, destination_id, title, description, price, unit, created_at) 
-      VALUES (?, ?, ?, ?, ?, ?, CURDATE())`,
-      [creator_id, finalDestinationId, title, description, price, unit]
+      (creator_id, destination_id, title, description, price, unit, status, created_at) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, CURDATE())`,
+      [creator_id, finalDestinationId, title, description, price, unit, experienceStatus]
     );
 
     const experience_id = result.insertId;
 
     // Insert availability data
-    const availabilityValues = availability.map(slot => [
+    const availabilityValues = parsedAvailability.map(slot => [
       experience_id,
       slot.day_of_week,
       slot.start_time,
@@ -179,8 +194,7 @@ const createExperience = async (req, res) => {
     );
 
     // Insert tag associations
-    const tagValues = tags.map(tag_id => [experience_id, tag_id]);
-
+    const tagValues = parsedTags.map(tag_id => [experience_id, tag_id]);
     await connection.query(
       `INSERT INTO experience_tags 
       (experience_id, tag_id) 
@@ -188,48 +202,258 @@ const createExperience = async (req, res) => {
       [tagValues]
     );
 
+    // Handle image uploads if any
+    if (files && files.length > 0) {
+      // Convert file paths to web URLs
+      const imageValues = files.map(file => {
+        // Extract just the filename from the full path
+        const filename = file.path.split('\\').pop().split('/').pop();
+        
+        // Create web-accessible path
+        const webPath = `uploads/experiences/${filename}`;
+        
+        return [experience_id, webPath];
+      });
+
+      console.log('Web paths to be saved:', imageValues);
+      
+      // Insert image URLs into database
+      await connection.query(
+        'INSERT INTO experience_images (experience_id, image_url) VALUES ?',
+        [imageValues]
+      );
+    }
+
     // Commit the transaction
     await connection.commit();
-    
-    // Fetch additional data for response
     connection.release();
-    
+
     // Fetch the destination info
     const [destinationInfo] = await db.query(
       'SELECT * FROM destination WHERE destination_id = ?',
       [finalDestinationId]
     );
     
-    // Fetch the availability records
     const [availabilityRecords] = await db.query(
       'SELECT * FROM experience_availability WHERE experience_id = ?',
       [experience_id]
     );
 
-    // Fetch the tag information
     const [tagRecords] = await db.query(
       'SELECT t.tag_id, t.name FROM tags t JOIN experience_tags et ON t.tag_id = et.tag_id WHERE et.experience_id = ?',
       [experience_id]
     );
 
-    // Return success with all created data
+    // Fetch uploaded images if any
+    const [imageRecords] = files && files.length > 0 ? await db.query(
+      'SELECT * FROM experience_images WHERE experience_id = ?',
+      [experience_id]
+    ) : [[]];
+
     res.status(201).json({ 
       message: 'Experience and destination created successfully',
       experience_id,
       destination_id: finalDestinationId,
       destination: destinationInfo[0],
       availability: availabilityRecords,
-      tags: tagRecords
+      tags: tagRecords,
+      images: imageRecords || [],
+      status: experienceStatus
     });
   } catch (err) {
-    // Roll back the transaction in case of error
     await connection.rollback();
     connection.release();
-    
     console.error(err);
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
+
+
+// const createExperience = async (req, res) => {
+//   // Extract destination and experience data from request body
+//   const { 
+//     // Experience data
+//     creator_id, title, description, price, unit, availability, tags, status, // <-- added status
+
+//     // Destination data
+//     destination_name, city, destination_description, latitude, longitude,
+
+//     // Option to use existing destination
+//     destination_id
+//   } = req.body;
+
+//   // Begin transaction for atomicity
+//   const connection = await db.getConnection();
+//   await connection.beginTransaction();
+
+//   try {
+//     // Validate experience required fields
+//     if (!creator_id || !title || !description || !price || !unit) {
+//       await connection.rollback();
+//       return res.status(400).json({ message: 'All experience fields are required' });
+//     }
+
+//     // Validate 'unit' value
+//     const validUnits = ['Entry', 'Hour', 'Day', 'Package'];
+//     if (!validUnits.includes(unit)) {
+//       await connection.rollback();
+//       return res.status(400).json({ message: 'Invalid unit type' });
+//     }
+
+//     // Validate 'status' value if provided
+//     const validStatuses = ['draft', 'inactive', 'active'];
+//     const experienceStatus = status || 'draft';
+//     if (!validStatuses.includes(experienceStatus)) {
+//       await connection.rollback();
+//       return res.status(400).json({ message: 'Invalid status value' });
+//     }
+
+//     // Validate availability data
+//     if (!availability || !Array.isArray(availability) || availability.length === 0) {
+//       await connection.rollback();
+//       return res.status(400).json({ message: 'Availability information is required' });
+//     }
+
+//     // Validate each availability entry
+//     const validDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+//     for (const slot of availability) {
+//       if (!validDays.includes(slot.day_of_week) || !slot.start_time || !slot.end_time) {
+//         await connection.rollback();
+//         return res.status(400).json({ message: 'Each availability entry must have a valid day, start time, and end time' });
+//       }
+//     }
+
+//     // Validate tags
+//     if (!tags || !Array.isArray(tags) || tags.length === 0) {
+//       await connection.rollback();
+//       return res.status(400).json({ message: 'At least one tag is required' });
+//     }
+
+//     // Check if creator_id exists and has role 'Creator'
+//     const [user] = await connection.query('SELECT role FROM users WHERE user_id = ?', [creator_id]);
+//     if (user.length === 0) {
+//       await connection.rollback();
+//       return res.status(404).json({ message: 'Creator not found' });
+//     }
+//     if (user[0].role !== 'Creator') {
+//       await connection.rollback();
+//       return res.status(403).json({ message: 'User must have role "Creator" to create an experience' });
+//     }
+
+//     // Verify that all tag IDs exist
+//     const [existingTags] = await connection.query(
+//       'SELECT tag_id FROM tags WHERE tag_id IN (?)',
+//       [tags]
+//     );
+//     if (existingTags.length !== tags.length) {
+//       await connection.rollback();
+//       return res.status(400).json({ message: 'One or more tag IDs do not exist' });
+//     }
+
+//     // Handle destination - either use existing one or create new one
+//     let finalDestinationId;
+
+//     if (destination_id) {
+//       const [destinationCheck] = await connection.query(
+//         'SELECT destination_id FROM destination WHERE destination_id = ?',
+//         [destination_id]
+//       );
+//       if (destinationCheck.length === 0) {
+//         await connection.rollback();
+//         return res.status(404).json({ message: 'Specified destination does not exist' });
+//       }
+//       finalDestinationId = destination_id;
+//     } else {
+//       if (!destination_name || !city || !destination_description || !latitude || !longitude) {
+//         await connection.rollback();
+//         return res.status(400).json({ message: 'All destination fields are required when creating a new destination' });
+//       }
+//       const [existingDestination] = await connection.query(
+//         'SELECT destination_id FROM destination WHERE name = ? AND city = ?', 
+//         [destination_name, city]
+//       );
+//       if (existingDestination.length > 0) {
+//         finalDestinationId = existingDestination[0].destination_id;
+//       } else {
+//         const [newDestination] = await connection.query(
+//           'INSERT INTO destination (name, city, description, latitude, longitude) VALUES (?, ?, ?, ?, ?)',
+//           [destination_name, city, destination_description, latitude, longitude]
+//         );
+//         finalDestinationId = newDestination.insertId;
+//       }
+//     }
+
+//     // Insert new experience with status
+//     const [result] = await connection.query(
+//       `INSERT INTO experience 
+//       (creator_id, destination_id, title, description, price, unit, status, created_at) 
+//       VALUES (?, ?, ?, ?, ?, ?, ?, CURDATE())`,
+//       [creator_id, finalDestinationId, title, description, price, unit, experienceStatus]
+//     );
+
+//     const experience_id = result.insertId;
+
+//     // Insert availability data
+//     const availabilityValues = availability.map(slot => [
+//       experience_id,
+//       slot.day_of_week,
+//       slot.start_time,
+//       slot.end_time
+//     ]);
+
+//     await connection.query(
+//       `INSERT INTO experience_availability 
+//       (experience_id, day_of_week, start_time, end_time) 
+//       VALUES ?`,
+//       [availabilityValues]
+//     );
+
+//     // Insert tag associations
+//     const tagValues = tags.map(tag_id => [experience_id, tag_id]);
+//     await connection.query(
+//       `INSERT INTO experience_tags 
+//       (experience_id, tag_id) 
+//       VALUES ?`,
+//       [tagValues]
+//     );
+
+//     // Commit the transaction
+//     await connection.commit();
+//     connection.release();
+
+//     // Fetch the destination info
+//     const [destinationInfo] = await db.query(
+//       'SELECT * FROM destination WHERE destination_id = ?',
+//       [finalDestinationId]
+//     );
+    
+//     const [availabilityRecords] = await db.query(
+//       'SELECT * FROM experience_availability WHERE experience_id = ?',
+//       [experience_id]
+//     );
+
+//     const [tagRecords] = await db.query(
+//       'SELECT t.tag_id, t.name FROM tags t JOIN experience_tags et ON t.tag_id = et.tag_id WHERE et.experience_id = ?',
+//       [experience_id]
+//     );
+
+//     res.status(201).json({ 
+//       message: 'Experience and destination created successfully',
+//       experience_id,
+//       destination_id: finalDestinationId,
+//       destination: destinationInfo[0],
+//       availability: availabilityRecords,
+//       tags: tagRecords,
+//       status: experienceStatus
+//     });
+//   } catch (err) {
+//     await connection.rollback();
+//     connection.release();
+//     console.error(err);
+//     res.status(500).json({ error: 'Server error', details: err.message });
+//   }
+// };
+
 
 
 
@@ -300,12 +524,72 @@ const getAllExperience = async (req, res) => {
     res.status(500).json({ message: 'Failed to fetch experiences' });
   }
 };
+const getActiveExperience = async (req, res) => {
+  try {
+    // 1. Fetch active experiences with destination info and tags
+    const [experiences] = await db.query(`
+      SELECT 
+        e.experience_id AS id,
+        e.title,
+        e.description,
+        e.price,
+        e.unit,
+        d.name AS destination_name,
+        d.city AS location,
+        GROUP_CONCAT(t.name) AS tags
+      FROM experience e
+      JOIN destination d ON e.destination_id = d.destination_id
+      LEFT JOIN experience_tags et ON e.experience_id = et.experience_id
+      LEFT JOIN tags t ON et.tag_id = t.tag_id
+      WHERE e.status = 'active'
+      GROUP BY e.experience_id
+    `);
+
+    // 2. Fetch all images
+    const [images] = await db.query(`
+      SELECT 
+        experience_id,
+        image_url
+      FROM experience_images
+    `);
+
+    // 3. Map images by experience_id
+    const imageMap = {};
+    images.forEach(img => {
+      if (!imageMap[img.experience_id]) {
+        imageMap[img.experience_id] = [];
+      }
+
+      let webPath = img.image_url;
+      if (webPath.includes(':\\') || webPath.includes('\\')) {
+        const filename = webPath.split('\\').pop();
+        webPath = `uploads/experiences/${filename}`;
+      }
+
+      imageMap[img.experience_id].push(webPath);
+    });
+
+    // 4. Attach tags and images
+    experiences.forEach(exp => {
+      exp.tags = exp.tags ? exp.tags.split(',') : [];
+      exp.images = imageMap[exp.id] || [];
+    });
+
+    // 5. Return the result
+    res.status(200).json(experiences);
+
+  } catch (error) {
+    console.error('Error fetching active experiences:', error);
+    res.status(500).json({ message: 'Failed to fetch active experiences' });
+  }
+};
 
 
 const getExperienceById = async (req, res) => {
   const { id } = req.params;
 
   try {
+    // Fetch experience and destination
     const [rows] = await db.query(
       `SELECT e.*, d.name AS destination_name
        FROM experience e
@@ -320,22 +604,83 @@ const getExperienceById = async (req, res) => {
 
     const experience = rows[0];
 
+    // Fetch tags associated with the experience
     const [tagRows] = await db.query(
       `SELECT t.name FROM tags t
        JOIN experience_tags et ON t.tag_id = et.tag_id
        WHERE et.experience_id = ?`,
       [id]
     );
-
     experience.tags = tagRows.map(tag => tag.name);
+
+    // Fetch images associated with the experience
+    const [imageRows] = await db.query(
+      `SELECT image_url FROM experience_images WHERE experience_id = ?`,
+      [id]
+    );
+    
+    // Convert file system paths to URLs
+    experience.images = imageRows.map(img => {
+      // Extract just the filename from the absolute path
+      const filename = path.basename(img.image_url);
+      // Return a relative URL path that your server can handle
+      return `/uploads/experiences/${filename}`;
+    });
 
     res.json(experience);
   } catch (err) {
     console.error('Error fetching experience:', err);
     res.status(500).json({ error: 'Server error', details: err.message });
   }
-};
+}
 
+const getExperienceByUserID = async (req, res) => {
+  const { user_id } = req.params;
+
+  try {
+    // Fetch all experiences created by this user
+    const [experiences] = await db.query(
+      `SELECT e.*, d.name AS destination_name
+       FROM experience e
+       JOIN destination d ON e.destination_id = d.destination_id
+       WHERE e.creator_id = ?`,
+      [user_id]
+    );
+
+    if (experiences.length === 0) {
+      return res.status(404).json({ message: 'No experiences found for this user' });
+    }
+
+    // For each experience, fetch tags and images
+    for (const experience of experiences) {
+      const experienceId = experience.experience_id;
+
+      // Fetch tags
+      const [tagRows] = await db.query(
+        `SELECT t.name FROM tags t
+         JOIN experience_tags et ON t.tag_id = et.tag_id
+         WHERE et.experience_id = ?`,
+        [experienceId]
+      );
+      experience.tags = tagRows.map(tag => tag.name);
+
+      // Fetch images
+      const [imageRows] = await db.query(
+        `SELECT image_url FROM experience_images WHERE experience_id = ?`,
+        [experienceId]
+      );
+      experience.images = imageRows.map(img => {
+        const filename = path.basename(img.image_url);
+        return `/uploads/experiences/${filename}`;
+      });
+    }
+
+    res.json(experiences);
+  } catch (err) {
+    console.error('Error fetching experiences by user ID:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
+  }
+};
 
 const updateExperience = async (req, res) => {
   try {
@@ -372,4 +717,60 @@ const updateExperience = async (req, res) => {
   }
 };
 
-module.exports = { upload, createExperience, getAllExperience, getExperienceById, updateExperience };
+const saveExperience = async (req, res) => {
+  const { user_id, experience_id } = req.body;
+
+  console.log('Received request to save experience:', { user_id, experience_id });
+
+  try {
+    // Check if already saved
+    const [existing] = await db.query(
+      'SELECT * FROM saved_experiences WHERE user_id = ? AND experience_id = ?',
+      [user_id, experience_id]
+    );
+
+    console.log('Check query results:', existing);
+
+    if (existing.length > 0) {
+      return res.status(400).send('Experience already saved');
+    }
+
+    // Insert new saved experience
+    const [result] = await db.query(
+      'INSERT INTO saved_experiences (user_id, experience_id) VALUES (?, ?)',
+      [user_id, experience_id]
+    );
+
+    console.log('Experience saved successfully. Result:', result);
+    return res.status(200).send('Experience saved successfully');
+  } catch (err) {
+    console.error('Error saving experience:', err);
+    if (err.code === 'ER_NO_REFERENCED_ROW_2') {
+      return res.status(400).send('Invalid user_id or experience_id.');
+    }
+    return res.status(500).send('Internal server error');
+  }
+};
+
+const getSavedExperiences = async (req, res) => {
+  const { user_id } = req.params;
+
+  const query = `
+    SELECT experience.* 
+    FROM experience 
+    JOIN saved_experiences ON experience.experience_id = saved_experiences.experience_id
+    WHERE saved_experiences.user_id = ?
+  `;
+
+  try {
+    const [results] = await db.query(query, [user_id]);
+    return res.status(200).json(results);
+  } catch (err) {
+    console.error('Error fetching saved experiences:', err);
+    return res.status(500).send('Error fetching saved experiences');
+  }
+};
+
+
+
+module.exports = { upload, createExperienceHandler: [upload.array('images', 5), createExperience], createExperience, getAllExperience, getExperienceById, updateExperience, saveExperience, getSavedExperiences, getExperienceByUserID, getActiveExperience };
