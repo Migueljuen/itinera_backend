@@ -1,12 +1,17 @@
 
 const express = require('express');
 const cors = require('cors');
-const port = 3000;
+const port = process.env.PORT || 3000;
 const app = express();
 const path = require('path');
 
 // Middleware
-app.use(cors());
+const corsOptions = {
+  origin: process.env.CORS_ORIGIN || '*',
+  credentials: true,
+};
+app.use(cors(corsOptions));
+
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // User
