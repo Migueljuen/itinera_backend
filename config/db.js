@@ -13,8 +13,14 @@
 const mysql = require('mysql2');
 require('dotenv').config();
 
-// Create a connection pool using DATABASE_URL
-const pool = mysql.createPool(process.env.DATABASE_URL);
+// Create a connection pool with proper configuration for PlanetScale
+const pool = mysql.createPool({
+  uri: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: true
+  },
+  connectionLimit: 10
+});
 
 // Export the promise-based pool
 module.exports = pool.promise();
