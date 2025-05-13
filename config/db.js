@@ -13,9 +13,15 @@
 const mysql = require('mysql2');
 require('dotenv').config();
 
-// Create a connection pool with proper configuration for PlanetScale
+// Parse the DATABASE_URL to extract components
+const connectionString = process.env.DATABASE_URL;
+
+// Create a connection pool with explicit configuration
 const pool = mysql.createPool({
-  uri: process.env.DATABASE_URL,
+  host: 'aws.connect.psdb.cloud',
+  user: 'oc21qtrcw4ickzxi97pe',
+  password: process.env.DB_PASSWORD || 'pscale_pw_Khuq1VDNHOc2GgHZIjOLBL5IuAy4aHCvQG6WMvu9cad',
+  database: 'db_itinera',
   ssl: {
     rejectUnauthorized: true
   },
@@ -24,7 +30,6 @@ const pool = mysql.createPool({
 
 // Export the promise-based pool
 module.exports = pool.promise();
-
 
 
 
