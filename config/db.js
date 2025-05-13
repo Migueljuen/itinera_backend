@@ -13,7 +13,11 @@
 const mysql = require('mysql2');
 require('dotenv').config();
 
-module.exports = connection.promise();
+// Create a connection pool using DATABASE_URL
+const pool = mysql.createPool(process.env.DATABASE_URL);
+
+// Export the promise-based pool
+module.exports = pool.promise();
 
 
 
