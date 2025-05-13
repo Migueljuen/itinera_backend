@@ -1,9 +1,9 @@
-
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const port = process.env.PORT || 3000;
 const app = express();
-const path = require('path');
 
 // Middleware
 const corsOptions = {
