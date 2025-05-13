@@ -13,8 +13,10 @@
 const mysql = require('mysql2');
 require('dotenv').config();
 
-// Create a connection pool using the connection string
-const pool = mysql.createPool(process.env.DATABASE_URL);
+const connection = mysql.createConnection(process.env.DATABASE_URL);
 
-module.exports = pool.promise();
+module.exports = connection.promise();
+
+
+
 
