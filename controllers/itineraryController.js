@@ -1,13 +1,12 @@
 const dayjs = require('dayjs');  // Import Day.js
 const db = require('../config/db.js');
 
-// Create a new itinerary
 const createItinerary = async (req, res) => {
-  const { traveler_id, start_date, end_date, title, notes, experience_ids } = req.body;
+  const { traveler_id, start_date, end_date, title, notes, items } = req.body;
 
   // Validate required fields
-  if (!traveler_id || !start_date || !end_date || !title || !experience_ids || experience_ids.length === 0) {
-    return res.status(400).json({ message: 'Traveler ID, start date, end date, title, and experiences are required' });
+  if (!traveler_id || !start_date || !end_date || !title || !items || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ message: 'Traveler ID, start date, end date, title, and items are required' });
   }
 
   try {
@@ -18,58 +17,59 @@ const createItinerary = async (req, res) => {
       return res.status(400).json({ message: 'Start date cannot be after end date' });
     }
 
-    // Insert the new itinerary into the database
+    const totalDays = endDate.diff(startDate, 'day') + 1;
+
+    // Validate each item
+    for (const item of items) {
+      const { experience_id, day_number, start_time, end_time } = item;
+      if (!experience_id || !day_number || !start_time || !end_time) {
+        return res.status(400).json({ message: 'Each item must include experience_id, day_number, start_time, and end_time' });
+      }
+
+      if (day_number < 1 || day_number > totalDays) {
+        return res.status(400).json({ message: `Invalid day_number: must be between 1 and ${totalDays}` });
+      }
+    }
+
+    // Insert into itinerary table
     const [result] = await db.query(
-      'INSERT INTO itinerary (traveler_id, start_date, end_date, title, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [traveler_id, startDate.format('YYYY-MM-DD'), endDate.format('YYYY-MM-DD'), title, notes, dayjs().format('YYYY-MM-DD HH:mm:ss')]
+      `INSERT INTO itinerary (traveler_id, start_date, end_date, title, notes, created_at, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [traveler_id, start_date, end_date, title, notes || '', dayjs().format('YYYY-MM-DD'), 'upcoming']
     );
 
-    // Make sure we have the insertId and it's valid
     const itinerary_id = result.insertId;
-    console.log('New itinerary ID:', itinerary_id); // Debug log
-    
+
     if (!itinerary_id) {
-      throw new Error('Failed to get new itinerary ID');
+      throw new Error('Failed to create itinerary');
     }
 
-    // Create an array of values for the SQL query
-    const experienceValues = [];
-    
-    // Generate default scheduled dates and time slots
-    experience_ids.forEach((experience_id, index) => {
-      // Calculate scheduled date (start date + index + 1 days)
-      const scheduled_date = dayjs(start_date).add(index + 1, 'day').format('YYYY-MM-DD');
-      
-      // Define time slots (rotating)
-      const time_slots = ['10:00 AM - 12:00 PM', '2:00 PM - 4:00 PM', '9:00 AM - 11:00 AM'];
-      const time_slot = time_slots[index % time_slots.length];
-      
-      console.log(`Adding experience: ${itinerary_id}, ${experience_id}, ${scheduled_date}, ${time_slot}`); // Debug log
-      experienceValues.push([itinerary_id, experience_id, scheduled_date, time_slot]);
-    });
-    
-    // Check if we have experiences to insert and log the values for debugging
-    if (experienceValues.length > 0) {
-      console.log('Experience values to insert:', experienceValues); // Debug log
-      
-      // Insert experiences into itinerary_experience table
-      await db.query(
-        'INSERT INTO itinerary_experience (itinerary_id, experience_id, scheduled_date, time_slot) VALUES ?',
-        [experienceValues]
-      );
-    }
+    // Prepare values for batch insert into itinerary_items
+    const itemValues = items.map(item => [
+      itinerary_id,
+      item.experience_id,
+      item.day_number,
+      item.start_time,
+      item.end_time,
+      item.custom_note || '',
+      dayjs().format('YYYY-MM-DD HH:mm:ss'),
+      dayjs().format('YYYY-MM-DD HH:mm:ss')
+    ]);
 
-    // Return success response
-    res.status(201).json({ 
-      message: 'Itinerary created successfully', 
-      itinerary_id
-    });
+    await db.query(
+      `INSERT INTO itinerary_items 
+        (itinerary_id, experience_id, day_number, start_time, end_time, custom_note, created_at, updated_at)
+       VALUES ?`,
+      [itemValues]
+    );
+
+    res.status(201).json({ message: 'Itinerary created successfully', itinerary_id });
+
   } catch (err) {
-    console.error('Error details:', err);
+    console.error('Error creating itinerary:', err);
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
-
 
 
 
@@ -106,6 +106,42 @@ const getItineraryByTraveler = async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 };
+
+
+const getItineraryItems = async (req, res) => {
+  const { itinerary_id } = req.params;
+
+  if (!itinerary_id) {
+    return res.status(400).json({ message: 'Itinerary ID is required' });
+  }
+
+  try {
+    const [items] = await db.query(
+      `SELECT 
+         ii.item_id,
+         ii.experience_id,
+         ii.day_number,
+         ii.start_time,
+         ii.end_time,
+         ii.custom_note,
+         ii.created_at,
+         ii.updated_at,
+         e.title AS experience_name, 
+         e.description AS experience_description
+       FROM itinerary_items ii
+       LEFT JOIN experience e ON ii.experience_id = e.experience_id
+       WHERE ii.itinerary_id = ?
+       ORDER BY ii.day_number, ii.start_time`,
+      [itinerary_id]
+    );
+
+    res.status(200).json({ itinerary_id, items });
+  } catch (err) {
+    console.error('Error fetching itinerary items:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
+  }
+};
+
 
 // Update an itinerary
 const updateItinerary = async (req, res) => {
@@ -154,6 +190,8 @@ const deleteItinerary = async (req, res) => {
 module.exports = {
   createItinerary,
   getItineraryByTraveler,
+  getItineraryItems,
   updateItinerary,
-  deleteItinerary
+  deleteItinerary,
+  
 };

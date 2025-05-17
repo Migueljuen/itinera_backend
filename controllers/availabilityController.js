@@ -26,6 +26,26 @@ const createAvailability = async (req, res) => {
 };
 
 // Fetch availability for a specific experience
+// const getAvailability = async (req, res) => {
+//   const { experience_id } = req.params;
+
+//   if (!experience_id) {
+//     return res.status(400).json({ message: 'Experience ID is required' });
+//   }
+
+//   try {
+//     const [availability] = await db.query(
+//       'SELECT * FROM experience_availability WHERE experience_id = ?',
+//       [experience_id]
+//     );
+
+//     res.status(200).json({ availability });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ error: 'Server error' });
+//   }
+// };
+
 const getAvailability = async (req, res) => {
   const { experience_id } = req.params;
 
@@ -34,10 +54,20 @@ const getAvailability = async (req, res) => {
   }
 
   try {
+    // Fetch availability days for the experience
     const [availability] = await db.query(
-      'SELECT * FROM experience_availability WHERE experience_id = ?',
+      'SELECT availability_id, experience_id, day_of_week FROM experience_availability WHERE experience_id = ?',
       [experience_id]
     );
+
+    // For each availability day, fetch its time slots
+    for (const day of availability) {
+      const [timeSlots] = await db.query(
+        'SELECT slot_id, availability_id, start_time, end_time FROM availability_time_slots WHERE availability_id = ?',
+        [day.availability_id]
+      );
+      day.time_slots = timeSlots;
+    }
 
     res.status(200).json({ availability });
   } catch (err) {
@@ -45,6 +75,7 @@ const getAvailability = async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 };
+
 
 // Update availability for an experience (optional)
 const updateAvailability = async (req, res) => {

@@ -35,7 +35,7 @@ const createExperience = async (req, res) => {
   // Extract destination and experience data from request body
   const { 
     // Experience data
-    creator_id, title, description, price, unit, availability, tags, status, // <-- added status
+    creator_id, title, description, price, unit, availability, tags, status,
 
     // Destination data
     destination_name, city, destination_description, latitude, longitude,
@@ -73,46 +73,6 @@ const createExperience = async (req, res) => {
       return res.status(400).json({ message: 'Invalid status value' });
     }
 
-// Validate availability data
-if (!availability || (typeof availability === 'string' && !availability.trim()) || (Array.isArray(availability) && availability.length === 0)) {
-  await connection.rollback();
-  return res.status(400).json({ message: 'Availability information is required' });
-}
-
-let parsedAvailability;
-try {
-  // Parse availability if it's a string
-  parsedAvailability = typeof availability === 'string' ? JSON.parse(availability) : availability;
-} catch (e) {
-  await connection.rollback();
-  return res.status(400).json({ message: 'Invalid availability format' });
-}
-
-// Validate each availability entry
-const validDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-for (const slot of parsedAvailability) {
-  if (!validDays.includes(slot.day_of_week) || !slot.start_time || !slot.end_time) {
-    await connection.rollback();
-    return res.status(400).json({ message: 'Each availability entry must have a valid day, start time, and end time' });
-  }
-}
-
-console.log("Tags before parsing:", tags);
-let parsedTags;
-try {
-  // Parse tags if they are sent as a string
-  parsedTags = typeof tags === 'string' ? JSON.parse(tags) : tags;
-} catch (e) {
-  await connection.rollback();
-  return res.status(400).json({ message: 'Invalid tags format' });
-}
-
-if (!parsedTags || !Array.isArray(parsedTags) || parsedTags.length === 0) {
-  await connection.rollback();
-  return res.status(400).json({ message: 'At least one tag is required' });
-}
-console.log("Tags before checking:", parsedTags);
-
     // Check if creator_id exists and has role 'Creator'
     const [user] = await connection.query('SELECT role FROM users WHERE user_id = ?', [creator_id]);
     if (user.length === 0) {
@@ -124,6 +84,23 @@ console.log("Tags before checking:", parsedTags);
       return res.status(403).json({ message: 'User must have role "Creator" to create an experience' });
     }
 
+    // Parse and validate tags
+    console.log("Tags before parsing:", tags);
+    let parsedTags;
+    try {
+      // Parse tags if they are sent as a string
+      parsedTags = typeof tags === 'string' ? JSON.parse(tags) : tags;
+    } catch (e) {
+      await connection.rollback();
+      return res.status(400).json({ message: 'Invalid tags format' });
+    }
+
+    if (!parsedTags || !Array.isArray(parsedTags) || parsedTags.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({ message: 'At least one tag is required' });
+    }
+    console.log("Tags before checking:", parsedTags);
+
     // Verify that all tag IDs exist
     const [existingTags] = await connection.query(
       'SELECT tag_id FROM tags WHERE tag_id IN (?)',
@@ -133,7 +110,6 @@ console.log("Tags before checking:", parsedTags);
       await connection.rollback();
       return res.status(400).json({ message: 'One or more tag IDs do not exist' });
     }
-    
 
     // Handle destination - either use existing one or create new one
     let finalDestinationId;
@@ -178,20 +154,63 @@ console.log("Tags before checking:", parsedTags);
 
     const experience_id = result.insertId;
 
-    // Insert availability data
-    const availabilityValues = parsedAvailability.map(slot => [
-      experience_id,
-      slot.day_of_week,
-      slot.start_time,
-      slot.end_time
-    ]);
+    // Parse and validate availability after getting experience_id
+    if (
+      !availability ||
+      (typeof availability === 'string' && !availability.trim()) ||
+      (Array.isArray(availability) && availability.length === 0)
+    ) {
+      await connection.rollback();
+      return res.status(400).json({ message: 'Availability information is required' });
+    }
 
-    await connection.query(
-      `INSERT INTO experience_availability 
-      (experience_id, day_of_week, start_time, end_time) 
-      VALUES ?`,
-      [availabilityValues]
-    );
+    let parsedAvailability;
+    try {
+      // Parse availability if it's a string
+      parsedAvailability = typeof availability === 'string' ? JSON.parse(availability) : availability;
+    } catch (e) {
+      await connection.rollback();
+      return res.status(400).json({ message: 'Invalid availability format' });
+    }
+
+    // Validate each availability entry
+    const validDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+    // Insert availability and time slots
+    for (const dayAvailability of parsedAvailability) {
+      const { day_of_week, time_slots } = dayAvailability;
+
+      if (
+        !validDays.includes(day_of_week) ||
+        !Array.isArray(time_slots) ||
+        time_slots.length === 0
+      ) {
+        await connection.rollback();
+        return res.status(400).json({ message: 'Each availability entry must have a valid day and time_slots array' });
+      }
+
+      // Insert into experience_availability
+      const [availabilityResult] = await connection.execute(
+        `INSERT INTO experience_availability (experience_id, day_of_week) VALUES (?, ?)`,
+        [experience_id, day_of_week]
+      );
+      const availability_id = availabilityResult.insertId;
+
+      // Insert all associated time slots - using the correct table name
+      for (const slot of time_slots) {
+        const { start_time, end_time } = slot;
+
+        if (!start_time || !end_time) {
+          await connection.rollback();
+          return res.status(400).json({ message: 'Each time slot must have a start_time and end_time' });
+        }
+
+        await connection.execute(
+          `INSERT INTO availability_time_slots (availability_id, start_time, end_time) VALUES (?, ?, ?)`,
+          [availability_id, start_time, end_time]
+        );
+      }
+    }
 
     // Insert tag associations
     const tagValues = parsedTags.map(tag_id => [experience_id, tag_id]);
@@ -234,11 +253,28 @@ console.log("Tags before checking:", parsedTags);
       [finalDestinationId]
     );
     
+    // Fetch availability records
     const [availabilityRecords] = await db.query(
       'SELECT * FROM experience_availability WHERE experience_id = ?',
       [experience_id]
     );
+    
+    // Fetch time slots for each availability record
+    const processedAvailability = [];
+    
+    for (const avail of availabilityRecords) {
+      const [timeSlots] = await db.query(
+        'SELECT * FROM availability_time_slots WHERE availability_id = ?',
+        [avail.availability_id]
+      );
+      
+      processedAvailability.push({
+        ...avail,
+        time_slots: timeSlots
+      });
+    }
 
+    // Fetch tag records
     const [tagRecords] = await db.query(
       'SELECT t.tag_id, t.name FROM tags t JOIN experience_tags et ON t.tag_id = et.tag_id WHERE et.experience_id = ?',
       [experience_id]
@@ -255,7 +291,7 @@ console.log("Tags before checking:", parsedTags);
       experience_id,
       destination_id: finalDestinationId,
       destination: destinationInfo[0],
-      availability: availabilityRecords,
+      availability: processedAvailability,
       tags: tagRecords,
       images: imageRecords || [],
       status: experienceStatus
@@ -267,7 +303,6 @@ console.log("Tags before checking:", parsedTags);
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
-
 
 // const createExperience = async (req, res) => {
 //   // Extract destination and experience data from request body
@@ -633,6 +668,81 @@ const getExperienceById = async (req, res) => {
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 }
+
+
+// const getExperienceById = async (req, res) => {
+//   const { id } = req.params;
+
+//   try {
+//     // Fetch experience and destination
+//     const [rows] = await db.query(
+//       `SELECT e.*, d.name AS destination_name
+//        FROM experience e
+//        JOIN destination d ON e.destination_id = d.destination_id
+//        WHERE e.experience_id = ?`,
+//       [id]
+//     );
+
+//     if (rows.length === 0) {
+//       return res.status(404).json({ message: 'Experience not found' });
+//     }
+
+//     const experience = rows[0];
+
+//     // Fetch tags associated with the experience
+//     const [tagRows] = await db.query(
+//       `SELECT t.name FROM tags t
+//        JOIN experience_tags et ON t.tag_id = et.tag_id
+//        WHERE et.experience_id = ?`,
+//       [id]
+//     );
+//     experience.tags = tagRows.map(tag => tag.name);
+
+//     // Fetch images associated with the experience
+//     const [imageRows] = await db.query(
+//       `SELECT image_url FROM experience_images WHERE experience_id = ?`,
+//       [id]
+//     );
+    
+//     experience.images = imageRows.map(img => {
+//       const filename = path.basename(img.image_url);
+//       return `/uploads/experiences/${filename}`;
+//     });
+
+//     // Fetch availability days for this experience
+//     const [availabilityRows] = await db.query(
+//       `SELECT availability_id, experience_id, day_of_week
+//        FROM availability
+//        WHERE experience_id = ?`,
+//       [id]
+//     );
+
+//     // For each availability day, fetch the time slots
+//     const availabilityWithSlots = await Promise.all(
+//       availabilityRows.map(async (avail) => {
+//         const [timeSlots] = await db.query(
+//           `SELECT slot_id, availability_id, start_time, end_time
+//            FROM availability_time_slots
+//            WHERE availability_id = ?`,
+//           [avail.availability_id]
+//         );
+
+//         return {
+//           ...avail,
+//           time_slots: timeSlots,
+//         };
+//       })
+//     );
+
+//     experience.availability = availabilityWithSlots;
+
+//     res.json(experience);
+
+//   } catch (err) {
+//     console.error('Error fetching experience:', err);
+//     res.status(500).json({ error: 'Server error', details: err.message });
+//   }
+// };
 
 const getExperienceByUserID = async (req, res) => {
   const { user_id } = req.params;
