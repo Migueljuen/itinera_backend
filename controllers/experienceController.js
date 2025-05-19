@@ -489,13 +489,12 @@ const createExperience = async (req, res) => {
 //   }
 // };
 
-
-
-
 const getAllExperience = async (req, res) => {
   try {
-    // 1. Fetch all experiences with destination info and tags
-    const [experiences] = await db.query(`
+    const { location, start_date, end_date } = req.query;
+
+    // Base query for experiences
+    let query = `
       SELECT 
         e.experience_id AS id,
         e.title,
@@ -504,15 +503,62 @@ const getAllExperience = async (req, res) => {
         e.unit,
         d.name AS destination_name,
         d.city AS location,
-        GROUP_CONCAT(t.name) AS tags
+        GROUP_CONCAT(DISTINCT t.name) AS tags
       FROM experience e
       JOIN destination d ON e.destination_id = d.destination_id
       LEFT JOIN experience_tags et ON e.experience_id = et.experience_id
       LEFT JOIN tags t ON et.tag_id = t.tag_id
-      GROUP BY e.experience_id
-    `);
+    `;
 
-    // 2. Fetch all images
+    const params = [];
+
+    // Add WHERE clause for location filtering
+    if (location) {
+      query += ` WHERE LOWER(d.city) = LOWER(?) `;
+      params.push(location.trim());
+    } else {
+      query += ` WHERE 1=1 `; // Always true condition if no location specified
+    }
+
+    // Date range filtering - only add if both dates are provided
+    if (start_date && end_date) {
+      // Convert dates to Date objects
+      const startDate = new Date(start_date);
+      const endDate = new Date(end_date);
+      
+      // Get all days of the week during the trip (0-6, where 0 = Sunday)
+      const tripDaysOfWeek = [];
+      for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+        tripDaysOfWeek.push(d.getDay());
+      }
+      
+      // Convert day numbers to day names used in your database
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const tripDayNames = tripDaysOfWeek.map(dayNum => dayNames[dayNum]);
+      
+      // Add the date range filter - experiences must have availability on at least one day of the trip
+      query += ` 
+        AND e.experience_id IN (
+          SELECT DISTINCT a.experience_id 
+          FROM experience_availability a
+        JOIN availability_time_slots ts ON a.availability_id = ts.availability_id
+
+          WHERE a.day_of_week IN (${tripDayNames.map(() => '?').join(',')})
+          AND ts.start_time IS NOT NULL
+        )
+      `;
+      
+      // Add all the day names to the params array
+      params.push(...tripDayNames);
+    }
+
+    // Finalize with GROUP BY
+    query += ` GROUP BY e.experience_id `;
+
+    // Execute the query
+    const [experiences] = await db.query(query, params);
+
+    // Fetch images
     const [images] = await db.query(`
       SELECT 
         experience_id,
@@ -520,38 +566,98 @@ const getAllExperience = async (req, res) => {
       FROM experience_images
     `);
 
-    // 3. Map images by experience_id with corrected paths
+    // Fetch availability data for each experience
+let availabilityQuery = `
+  SELECT 
+    a.experience_id,
+    a.availability_id,
+    a.day_of_week,
+    ts.slot_id,
+    ts.start_time,
+    ts.end_time
+  FROM experience_availability a
+  JOIN availability_time_slots ts ON a.availability_id = ts.availability_id
+  WHERE a.experience_id IN (?)
+`;
+
+
+    // Get all experience IDs
+    const experienceIds = experiences.map(exp => exp.id);
+    
+    // Only fetch availability if we have experiences
+    let availabilityResults = [];
+    if (experienceIds.length > 0) {
+      [availabilityResults] = await db.query(availabilityQuery, [experienceIds]);
+    }
+
+    // Map images
     const imageMap = {};
     images.forEach(img => {
       if (!imageMap[img.experience_id]) {
         imageMap[img.experience_id] = [];
       }
-      
-      // Convert absolute Windows file paths to web-accessible paths
+
       let webPath = img.image_url;
-      
-      // If the path contains Windows drive indicators or backslashes
-      if (webPath.includes(':\\') || webPath.includes('\\')){
-        // Extract just the filename from the path
+
+      if (webPath.includes(':\\') || webPath.includes('\\')) {
         const filename = webPath.split('\\').pop();
-        webPath = `uploads/experiences/${filename}`;
+        webPath = `uploads/experience/${filename}`;
       }
-      
+
       imageMap[img.experience_id].push(webPath);
     });
 
-    // 4. Attach tags and images to each experience
-    experiences.forEach(exp => {
-      exp.tags = exp.tags ? exp.tags.split(',') : [];
-      exp.images = imageMap[exp.id] || [];
+    // Map availability data
+    const availabilityMap = {};
+    availabilityResults.forEach(avail => {
+      if (!availabilityMap[avail.experience_id]) {
+        availabilityMap[avail.experience_id] = [];
+      }
       
-      // For debugging
-      if (exp.images.length > 0) {
-        console.log(`Experience ${exp.id} has images:`, exp.images);
+      // Find existing day entry or create new one
+      let dayAvailability = availabilityMap[avail.experience_id].find(
+        day => day.availability_id === avail.availability_id
+      );
+      
+      if (!dayAvailability) {
+        dayAvailability = {
+          availability_id: avail.availability_id,
+          experience_id: avail.experience_id,
+          day_of_week: avail.day_of_week,
+          time_slots: []
+        };
+        availabilityMap[avail.experience_id].push(dayAvailability);
+      }
+      
+      // Add time slot if it exists
+      if (avail.slot_id) {
+        dayAvailability.time_slots.push({
+          slot_id: avail.slot_id,
+          availability_id: avail.availability_id,
+          start_time: avail.start_time,
+          end_time: avail.end_time
+        });
       }
     });
 
-    // 5. Return the final result
+    // Attach tags, images, and availability to each experience
+    experiences.forEach(exp => {
+      exp.tags = exp.tags ? exp.tags.split(',') : [];
+      exp.images = imageMap[exp.id] || [];
+      exp.availability = availabilityMap[exp.id] || [];
+      
+      // Add budget category based on price
+      if (exp.price === 0) {
+        exp.budget_category = 'Free';
+      } else if (exp.price <= 500) {
+        exp.budget_category = 'Budget-friendly';
+      } else if (exp.price <= 2000) {
+        exp.budget_category = 'Mid-range';
+      } else {
+        exp.budget_category = 'Premium';
+      }
+    });
+
     res.status(200).json(experiences);
 
   } catch (error) {
@@ -559,6 +665,75 @@ const getAllExperience = async (req, res) => {
     res.status(500).json({ message: 'Failed to fetch experiences' });
   }
 };
+
+
+// const getAllExperience = async (req, res) => {
+//   try {
+//     // 1. Fetch all experiences with destination info and tags
+//     const [experiences] = await db.query(`
+//       SELECT 
+//         e.experience_id AS id,
+//         e.title,
+//         e.description,
+//         e.price,
+//         e.unit,
+//         d.name AS destination_name,
+//         d.city AS location,
+//         GROUP_CONCAT(t.name) AS tags
+//       FROM experience e
+//       JOIN destination d ON e.destination_id = d.destination_id
+//       LEFT JOIN experience_tags et ON e.experience_id = et.experience_id
+//       LEFT JOIN tags t ON et.tag_id = t.tag_id
+//       GROUP BY e.experience_id
+//     `);
+
+//     // 2. Fetch all images
+//     const [images] = await db.query(`
+//       SELECT 
+//         experience_id,
+//         image_url
+//       FROM experience_images
+//     `);
+
+//     // 3. Map images by experience_id with corrected paths
+//     const imageMap = {};
+//     images.forEach(img => {
+//       if (!imageMap[img.experience_id]) {
+//         imageMap[img.experience_id] = [];
+//       }
+      
+//       // Convert absolute Windows file paths to web-accessible paths
+//       let webPath = img.image_url;
+      
+//       // If the path contains Windows drive indicators or backslashes
+//       if (webPath.includes(':\\') || webPath.includes('\\')){
+//         // Extract just the filename from the path
+//         const filename = webPath.split('\\').pop();
+//         webPath = `uploads/experiences/${filename}`;
+//       }
+      
+//       imageMap[img.experience_id].push(webPath);
+//     });
+
+//     // 4. Attach tags and images to each experience
+//     experiences.forEach(exp => {
+//       exp.tags = exp.tags ? exp.tags.split(',') : [];
+//       exp.images = imageMap[exp.id] || [];
+      
+//       // For debugging
+//       if (exp.images.length > 0) {
+//         console.log(`Experience ${exp.id} has images:`, exp.images);
+//       }
+//     });
+
+//     // 5. Return the final result
+//     res.status(200).json(experiences);
+
+//   } catch (error) {
+//     console.error('Error fetching experiences:', error);
+//     res.status(500).json({ message: 'Failed to fetch experiences' });
+//   }
+// };
 const getActiveExperience = async (req, res) => {
   try {
     // 1. Fetch active experiences with destination info and tags

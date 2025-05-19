@@ -29,7 +29,7 @@ const getExperiencesForItinerary = async (req, res) => {
 
   try {
     const [experiences] = await db.query(
-      'SELECT * FROM itinerary_experience WHERE itinerary_id = ?',
+      'SELECT * FROM itinerary_items WHERE itinerary_id = ?',
       [itinerary_id]
     );
 
@@ -50,7 +50,7 @@ const deleteExperienceFromItinerary = async (req, res) => {
 
   try {
     const [result] = await db.query(
-      'DELETE FROM itinerary_experience WHERE itinerary_id = ? AND experience_id = ?',
+      'DELETE FROM itinerary_items WHERE itinerary_id = ? AND experience_id = ?',
       [itinerary_id, experience_id]
     );
 
