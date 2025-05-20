@@ -41,7 +41,7 @@ const createExperience = async (req, res) => {
     destination_name, city, destination_description, latitude, longitude,
 
     // Option to use existing destination
-    destination_id
+    destination_id,  travel_companion
   } = req.body;
 
   // Get uploaded files if any
@@ -145,12 +145,12 @@ const createExperience = async (req, res) => {
     }
 
     // Insert new experience with status
-    const [result] = await connection.query(
-      `INSERT INTO experience 
-      (creator_id, destination_id, title, description, price, unit, status, created_at) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, CURDATE())`,
-      [creator_id, finalDestinationId, title, description, price, unit, experienceStatus]
-    );
+const [result] = await connection.query(
+  `INSERT INTO experience 
+  (creator_id, destination_id, title, description, price, unit, status, travel_companion, created_at) 
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURDATE())`,
+  [creator_id, finalDestinationId, title, description, price, unit, experienceStatus, travel_companion]
+);
 
     const experience_id = result.insertId;
 
@@ -304,194 +304,19 @@ const createExperience = async (req, res) => {
   }
 };
 
-// const createExperience = async (req, res) => {
-//   // Extract destination and experience data from request body
-//   const { 
-//     // Experience data
-//     creator_id, title, description, price, unit, availability, tags, status, // <-- added status
-
-//     // Destination data
-//     destination_name, city, destination_description, latitude, longitude,
-
-//     // Option to use existing destination
-//     destination_id
-//   } = req.body;
-
-//   // Begin transaction for atomicity
-//   const connection = await db.getConnection();
-//   await connection.beginTransaction();
-
-//   try {
-//     // Validate experience required fields
-//     if (!creator_id || !title || !description || !price || !unit) {
-//       await connection.rollback();
-//       return res.status(400).json({ message: 'All experience fields are required' });
-//     }
-
-//     // Validate 'unit' value
-//     const validUnits = ['Entry', 'Hour', 'Day', 'Package'];
-//     if (!validUnits.includes(unit)) {
-//       await connection.rollback();
-//       return res.status(400).json({ message: 'Invalid unit type' });
-//     }
-
-//     // Validate 'status' value if provided
-//     const validStatuses = ['draft', 'inactive', 'active'];
-//     const experienceStatus = status || 'draft';
-//     if (!validStatuses.includes(experienceStatus)) {
-//       await connection.rollback();
-//       return res.status(400).json({ message: 'Invalid status value' });
-//     }
-
-//     // Validate availability data
-//     if (!availability || !Array.isArray(availability) || availability.length === 0) {
-//       await connection.rollback();
-//       return res.status(400).json({ message: 'Availability information is required' });
-//     }
-
-//     // Validate each availability entry
-//     const validDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-//     for (const slot of availability) {
-//       if (!validDays.includes(slot.day_of_week) || !slot.start_time || !slot.end_time) {
-//         await connection.rollback();
-//         return res.status(400).json({ message: 'Each availability entry must have a valid day, start time, and end time' });
-//       }
-//     }
-
-//     // Validate tags
-//     if (!tags || !Array.isArray(tags) || tags.length === 0) {
-//       await connection.rollback();
-//       return res.status(400).json({ message: 'At least one tag is required' });
-//     }
-
-//     // Check if creator_id exists and has role 'Creator'
-//     const [user] = await connection.query('SELECT role FROM users WHERE user_id = ?', [creator_id]);
-//     if (user.length === 0) {
-//       await connection.rollback();
-//       return res.status(404).json({ message: 'Creator not found' });
-//     }
-//     if (user[0].role !== 'Creator') {
-//       await connection.rollback();
-//       return res.status(403).json({ message: 'User must have role "Creator" to create an experience' });
-//     }
-
-//     // Verify that all tag IDs exist
-//     const [existingTags] = await connection.query(
-//       'SELECT tag_id FROM tags WHERE tag_id IN (?)',
-//       [tags]
-//     );
-//     if (existingTags.length !== tags.length) {
-//       await connection.rollback();
-//       return res.status(400).json({ message: 'One or more tag IDs do not exist' });
-//     }
-
-//     // Handle destination - either use existing one or create new one
-//     let finalDestinationId;
-
-//     if (destination_id) {
-//       const [destinationCheck] = await connection.query(
-//         'SELECT destination_id FROM destination WHERE destination_id = ?',
-//         [destination_id]
-//       );
-//       if (destinationCheck.length === 0) {
-//         await connection.rollback();
-//         return res.status(404).json({ message: 'Specified destination does not exist' });
-//       }
-//       finalDestinationId = destination_id;
-//     } else {
-//       if (!destination_name || !city || !destination_description || !latitude || !longitude) {
-//         await connection.rollback();
-//         return res.status(400).json({ message: 'All destination fields are required when creating a new destination' });
-//       }
-//       const [existingDestination] = await connection.query(
-//         'SELECT destination_id FROM destination WHERE name = ? AND city = ?', 
-//         [destination_name, city]
-//       );
-//       if (existingDestination.length > 0) {
-//         finalDestinationId = existingDestination[0].destination_id;
-//       } else {
-//         const [newDestination] = await connection.query(
-//           'INSERT INTO destination (name, city, description, latitude, longitude) VALUES (?, ?, ?, ?, ?)',
-//           [destination_name, city, destination_description, latitude, longitude]
-//         );
-//         finalDestinationId = newDestination.insertId;
-//       }
-//     }
-
-//     // Insert new experience with status
-//     const [result] = await connection.query(
-//       `INSERT INTO experience 
-//       (creator_id, destination_id, title, description, price, unit, status, created_at) 
-//       VALUES (?, ?, ?, ?, ?, ?, ?, CURDATE())`,
-//       [creator_id, finalDestinationId, title, description, price, unit, experienceStatus]
-//     );
-
-//     const experience_id = result.insertId;
-
-//     // Insert availability data
-//     const availabilityValues = availability.map(slot => [
-//       experience_id,
-//       slot.day_of_week,
-//       slot.start_time,
-//       slot.end_time
-//     ]);
-
-//     await connection.query(
-//       `INSERT INTO experience_availability 
-//       (experience_id, day_of_week, start_time, end_time) 
-//       VALUES ?`,
-//       [availabilityValues]
-//     );
-
-//     // Insert tag associations
-//     const tagValues = tags.map(tag_id => [experience_id, tag_id]);
-//     await connection.query(
-//       `INSERT INTO experience_tags 
-//       (experience_id, tag_id) 
-//       VALUES ?`,
-//       [tagValues]
-//     );
-
-//     // Commit the transaction
-//     await connection.commit();
-//     connection.release();
-
-//     // Fetch the destination info
-//     const [destinationInfo] = await db.query(
-//       'SELECT * FROM destination WHERE destination_id = ?',
-//       [finalDestinationId]
-//     );
-    
-//     const [availabilityRecords] = await db.query(
-//       'SELECT * FROM experience_availability WHERE experience_id = ?',
-//       [experience_id]
-//     );
-
-//     const [tagRecords] = await db.query(
-//       'SELECT t.tag_id, t.name FROM tags t JOIN experience_tags et ON t.tag_id = et.tag_id WHERE et.experience_id = ?',
-//       [experience_id]
-//     );
-
-//     res.status(201).json({ 
-//       message: 'Experience and destination created successfully',
-//       experience_id,
-//       destination_id: finalDestinationId,
-//       destination: destinationInfo[0],
-//       availability: availabilityRecords,
-//       tags: tagRecords,
-//       status: experienceStatus
-//     });
-//   } catch (err) {
-//     await connection.rollback();
-//     connection.release();
-//     console.error(err);
-//     res.status(500).json({ error: 'Server error', details: err.message });
-//   }
-// };
-
 const getAllExperience = async (req, res) => {
   try {
-    const { location, start_date, end_date } = req.query;
+    const {
+      location,
+      start_date,
+      end_date,
+      tags,
+      budget,
+      explore_time,
+      travel_companion,
+      start_time,
+      end_time
+    } = req.query;
 
     // Base query for experiences
     let query = `
@@ -503,57 +328,125 @@ const getAllExperience = async (req, res) => {
         e.unit,
         d.name AS destination_name,
         d.city AS location,
+        e.travel_companion, 
         GROUP_CONCAT(DISTINCT t.name) AS tags
       FROM experience e
       JOIN destination d ON e.destination_id = d.destination_id
       LEFT JOIN experience_tags et ON e.experience_id = et.experience_id
       LEFT JOIN tags t ON et.tag_id = t.tag_id
+      LEFT JOIN experience_availability a ON e.experience_id = a.experience_id
+      LEFT JOIN availability_time_slots ts ON a.availability_id = ts.availability_id
     `;
 
     const params = [];
+    const conditions = [];
 
-    // Add WHERE clause for location filtering
+    // Location filter
     if (location) {
-      query += ` WHERE LOWER(d.city) = LOWER(?) `;
-      params.push(location.trim());
-    } else {
-      query += ` WHERE 1=1 `; // Always true condition if no location specified
+      conditions.push(`LOWER(d.city) LIKE ?`);
+      params.push(`%${location.trim().toLowerCase()}%`);
     }
 
-    // Date range filtering - only add if both dates are provided
+    // Travel companion filter
+    if (travel_companion) {
+      conditions.push(`LOWER(e.travel_companion) = LOWER(?)`);
+      params.push(travel_companion.trim());
+    }
+
+    // Explore time filter (based on hour of ts.start_time)
+if (explore_time) {
+  switch (explore_time.toLowerCase()) {
+    case 'daytime':
+      conditions.push('HOUR(ts.start_time) < 18');
+      break;
+    case 'nighttime':
+      conditions.push('HOUR(ts.start_time) >= 18');
+      break;
+    case 'both':
+    default:
+      // No filter
+      break;
+  }
+}
+
+
+    // // Specific time range filtering
+    // if (start_time && end_time) {
+    //   conditions.push(`TIME(ts.start_time) >= TIME(?) AND TIME(ts.end_time) <= TIME(?)`);
+    //   params.push(start_time, end_time);
+    // }
+
+    // Budget filter
+    if (budget) {
+      let budgetCondition = '';
+      switch (budget.toLowerCase()) {
+        case 'free':
+          budgetCondition = 'e.price = 0';
+          break;
+        case 'budget-friendly':
+          budgetCondition = 'e.price <= 500';
+          break;
+        case 'mid-range':
+          budgetCondition = 'e.price > 500 AND e.price <= 2000';
+          break;
+        case 'premium':
+          budgetCondition = 'e.price > 2000';
+          break;
+      }
+      if (budgetCondition) {
+        conditions.push(budgetCondition);
+      }
+    }
+
+    // Tag filtering
+    if (tags) {
+      const tagArray = Array.isArray(tags) ? tags : tags.split(',');
+      const cleanedTags = tagArray.map(tag => tag.trim());
+      if (cleanedTags.length > 0) {
+        conditions.push(`e.experience_id IN (
+          SELECT DISTINCT et2.experience_id 
+          FROM experience_tags et2 
+          JOIN tags t2 ON et2.tag_id = t2.tag_id 
+          WHERE t2.name IN (${cleanedTags.map(() => '?').join(',')})
+        )`);
+        params.push(...cleanedTags);
+      }
+    }
+
+    // Apply WHERE clause
+    if (conditions.length > 0) {
+      query += ` WHERE ${conditions.join(' AND ')}`;
+    }
+
+    // Date range filtering (day_of_week)
     if (start_date && end_date) {
-      // Convert dates to Date objects
       const startDate = new Date(start_date);
       const endDate = new Date(end_date);
-      
-      // Get all days of the week during the trip (0-6, where 0 = Sunday)
       const tripDaysOfWeek = [];
+
       for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
         tripDaysOfWeek.push(d.getDay());
       }
-      
-      // Convert day numbers to day names used in your database
-      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-      const tripDayNames = tripDaysOfWeek.map(dayNum => dayNames[dayNum]);
-      
-      // Add the date range filter - experiences must have availability on at least one day of the trip
-      query += ` 
-        AND e.experience_id IN (
-          SELECT DISTINCT a.experience_id 
-          FROM experience_availability a
-        JOIN availability_time_slots ts ON a.availability_id = ts.availability_id
 
-          WHERE a.day_of_week IN (${tripDayNames.map(() => '?').join(',')})
-          AND ts.start_time IS NOT NULL
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const tripDayNames = [...new Set(tripDaysOfWeek.map(dayNum => dayNames[dayNum]))];
+
+      const dateCondition = `
+        ${conditions.length > 0 ? 'AND' : 'WHERE'} e.experience_id IN (
+          SELECT DISTINCT a2.experience_id 
+          FROM experience_availability a2
+          JOIN availability_time_slots ts2 ON a2.availability_id = ts2.availability_id
+          WHERE a2.day_of_week IN (${tripDayNames.map(() => '?').join(',')})
+          AND ts2.start_time IS NOT NULL
         )
       `;
-      
-      // Add all the day names to the params array
+
+      query += dateCondition;
       params.push(...tripDayNames);
     }
 
     // Finalize with GROUP BY
-    query += ` GROUP BY e.experience_id `;
+    query += ` GROUP BY e.experience_id`;
 
     // Execute the query
     const [experiences] = await db.query(query, params);
@@ -566,28 +459,25 @@ const getAllExperience = async (req, res) => {
       FROM experience_images
     `);
 
-    // Fetch availability data for each experience
-let availabilityQuery = `
-  SELECT 
-    a.experience_id,
-    a.availability_id,
-    a.day_of_week,
-    ts.slot_id,
-    ts.start_time,
-    ts.end_time
-  FROM experience_availability a
-  JOIN availability_time_slots ts ON a.availability_id = ts.availability_id
-  WHERE a.experience_id IN (?)
-`;
-
-
     // Get all experience IDs
     const experienceIds = experiences.map(exp => exp.id);
-    
-    // Only fetch availability if we have experiences
+
+    // Fetch availability for these IDs
     let availabilityResults = [];
     if (experienceIds.length > 0) {
-      [availabilityResults] = await db.query(availabilityQuery, [experienceIds]);
+      const [results] = await db.query(`
+        SELECT 
+          a.experience_id,
+          a.availability_id,
+          a.day_of_week,
+          ts.slot_id,
+          ts.start_time,
+          ts.end_time
+        FROM experience_availability a
+        JOIN availability_time_slots ts ON a.availability_id = ts.availability_id
+        WHERE a.experience_id IN (?)
+      `, [experienceIds]);
+      availabilityResults = results;
     }
 
     // Map images
@@ -598,7 +488,6 @@ let availabilityQuery = `
       }
 
       let webPath = img.image_url;
-
       if (webPath.includes(':\\') || webPath.includes('\\')) {
         const filename = webPath.split('\\').pop();
         webPath = `uploads/experience/${filename}`;
@@ -607,18 +496,17 @@ let availabilityQuery = `
       imageMap[img.experience_id].push(webPath);
     });
 
-    // Map availability data
+    // Map availability
     const availabilityMap = {};
     availabilityResults.forEach(avail => {
       if (!availabilityMap[avail.experience_id]) {
         availabilityMap[avail.experience_id] = [];
       }
-      
-      // Find existing day entry or create new one
+
       let dayAvailability = availabilityMap[avail.experience_id].find(
         day => day.availability_id === avail.availability_id
       );
-      
+
       if (!dayAvailability) {
         dayAvailability = {
           availability_id: avail.availability_id,
@@ -628,8 +516,7 @@ let availabilityQuery = `
         };
         availabilityMap[avail.experience_id].push(dayAvailability);
       }
-      
-      // Add time slot if it exists
+
       if (avail.slot_id) {
         dayAvailability.time_slots.push({
           slot_id: avail.slot_id,
@@ -640,13 +527,12 @@ let availabilityQuery = `
       }
     });
 
-    // Attach tags, images, and availability to each experience
+    // Attach data
     experiences.forEach(exp => {
       exp.tags = exp.tags ? exp.tags.split(',') : [];
       exp.images = imageMap[exp.id] || [];
       exp.availability = availabilityMap[exp.id] || [];
-      
-      // Add budget category based on price
+
       if (exp.price === 0) {
         exp.budget_category = 'Free';
       } else if (exp.price <= 500) {
@@ -658,6 +544,10 @@ let availabilityQuery = `
       }
     });
 
+    console.log('Query:', query);
+    console.log('Params:', params);
+    console.log('Found experiences:', experiences.length);
+
     res.status(200).json(experiences);
 
   } catch (error) {
@@ -665,6 +555,269 @@ let availabilityQuery = `
     res.status(500).json({ message: 'Failed to fetch experiences' });
   }
 };
+
+
+// const getAllExperience = async (req, res) => {
+//   try {
+//     const { 
+//       location, 
+//       start_date, 
+//       end_date, 
+//       tags, // Add this - expect comma-separated string or array
+//       budget, // Add this
+//       explore_time, // Add this if needed
+//       travel_companion 
+//     } = req.query;
+
+//     // Base query for experiences
+// let query = `
+//       SELECT 
+//         e.experience_id AS id,
+//         e.title,
+//         e.description,
+//         e.price,
+//         e.unit,
+//         d.name AS destination_name,
+//         d.city AS location,
+//         e.travel_companion, 
+//         GROUP_CONCAT(DISTINCT t.name) AS tags
+//       FROM experience e
+//       JOIN destination d ON e.destination_id = d.destination_id
+//       LEFT JOIN experience_tags et ON e.experience_id = et.experience_id
+//       LEFT JOIN tags t ON et.tag_id = t.tag_id
+//     `;
+
+//     const params = [];
+//     const conditions = [];
+//     // Location filtering
+//     if (location) {
+//       conditions.push(`d.city LIKE ?`);
+//       params.push(`%${location.trim().toLowerCase()}%`);
+//     }
+
+
+// if (travel_companion) {
+//   conditions.push(`LOWER(e.travel_companion) = LOWER(?)`);
+// params.push(travel_companion.trim());
+
+// }
+
+// // ExploreTime filtering
+// if (exploreTime) {
+//   let timeCondition = '';
+//   switch (exploreTime.toLowerCase()) {
+//     case 'morning':
+//       timeCondition = 'HOUR(ts.start_time) < 12';
+//       break;
+//     case 'afternoon':
+//       timeCondition = 'HOUR(ts.start_time) >= 12 AND HOUR(ts.start_time) < 18';
+//       break;
+//     case 'evening':
+//       timeCondition = 'HOUR(ts.start_time) >= 18';
+//       break;
+//     case 'both':
+//     default:
+//       timeCondition = ''; // No filter
+//       break;
+//   }
+
+//   if (timeCondition) {
+//     conditions.push(timeCondition);
+//   }
+// }
+
+//     // Budget filtering
+//     if (budget) {
+//       let budgetCondition = '';
+//       switch (budget.toLowerCase()) {
+//         case 'free':
+//           budgetCondition = 'e.price = 0';
+//           break;
+//         case 'budget-friendly':
+//           budgetCondition = 'e.price <= 500';
+//           break;
+//         case 'mid-range':
+//           budgetCondition = 'e.price > 500 AND e.price <= 2000';
+//           break;
+//         case 'premium':
+//           budgetCondition = 'e.price > 2000';
+//           break;
+//       }
+//       if (budgetCondition) {
+//         conditions.push(budgetCondition);
+//       }
+//     }
+
+//     // Tag filtering - experiences must have at least one of the specified tags
+//     if (tags) {
+//       const tagArray = Array.isArray(tags) ? tags : tags.split(',');
+//       const cleanedTags = tagArray.map(tag => tag.trim());
+      
+//       if (cleanedTags.length > 0) {
+//         conditions.push(`e.experience_id IN (
+//           SELECT DISTINCT et2.experience_id 
+//           FROM experience_tags et2 
+//           JOIN tags t2 ON et2.tag_id = t2.tag_id 
+//           WHERE t2.name IN (${cleanedTags.map(() => '?').join(',')})
+//         )`);
+//         params.push(...cleanedTags);
+//       }
+//     }
+
+//     // Apply WHERE clause
+//     if (conditions.length > 0) {
+//       query += ` WHERE ${conditions.join(' AND ')}`;
+//     }
+
+//     // Date range filtering - only add if both dates are provided
+//     if (start_date && end_date) {
+//       // Convert dates to Date objects
+//       const startDate = new Date(start_date);
+//       const endDate = new Date(end_date);
+      
+//       // Get all days of the week during the trip (0-6, where 0 = Sunday)
+//       const tripDaysOfWeek = [];
+//       for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+//         tripDaysOfWeek.push(d.getDay());
+//       }
+      
+//       // Convert day numbers to day names used in your database
+//       const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+//       const tripDayNames = tripDaysOfWeek.map(dayNum => dayNames[dayNum]);
+      
+//       // Add the date range filter - experiences must have availability on at least one day of the trip
+//       const dateCondition = ` 
+//         ${conditions.length > 0 ? 'AND' : 'WHERE'} e.experience_id IN (
+//           SELECT DISTINCT a.experience_id 
+//           FROM experience_availability a
+//           JOIN availability_time_slots ts ON a.availability_id = ts.availability_id
+//           WHERE a.day_of_week IN (${tripDayNames.map(() => '?').join(',')})
+//           AND ts.start_time IS NOT NULL
+//         )
+//       `;
+      
+//       query += dateCondition;
+//       params.push(...tripDayNames);
+//     }
+
+//     // Finalize with GROUP BY
+//     query += ` GROUP BY e.experience_id `;
+
+//     // Execute the query
+//     const [experiences] = await db.query(query, params);
+
+//     // ... rest of your code for images and availability remains the same ...
+
+//     // Fetch images
+//     const [images] = await db.query(`
+//       SELECT 
+//         experience_id,
+//         image_url
+//       FROM experience_images
+//     `);
+
+//     // Fetch availability data for each experience
+//     let availabilityQuery = `
+//       SELECT 
+//         a.experience_id,
+//         a.availability_id,
+//         a.day_of_week,
+//         ts.slot_id,
+//         ts.start_time,
+//         ts.end_time
+//       FROM experience_availability a
+//       JOIN availability_time_slots ts ON a.availability_id = ts.availability_id
+//       WHERE a.experience_id IN (?)
+//     `;
+
+//     // Get all experience IDs
+//     const experienceIds = experiences.map(exp => exp.id);
+    
+//     // Only fetch availability if we have experiences
+//     let availabilityResults = [];
+//     if (experienceIds.length > 0) {
+//       [availabilityResults] = await db.query(availabilityQuery, [experienceIds]);
+//     }
+
+//     // Map images
+//     const imageMap = {};
+//     images.forEach(img => {
+//       if (!imageMap[img.experience_id]) {
+//         imageMap[img.experience_id] = [];
+//       }
+
+//       let webPath = img.image_url;
+
+//       if (webPath.includes(':\\') || webPath.includes('\\')) {
+//         const filename = webPath.split('\\').pop();
+//         webPath = `uploads/experience/${filename}`;
+//       }
+
+//       imageMap[img.experience_id].push(webPath);
+//     });
+
+//     // Map availability data
+//     const availabilityMap = {};
+//     availabilityResults.forEach(avail => {
+//       if (!availabilityMap[avail.experience_id]) {
+//         availabilityMap[avail.experience_id] = [];
+//       }
+      
+//       // Find existing day entry or create new one
+//       let dayAvailability = availabilityMap[avail.experience_id].find(
+//         day => day.availability_id === avail.availability_id
+//       );
+      
+//       if (!dayAvailability) {
+//         dayAvailability = {
+//           availability_id: avail.availability_id,
+//           experience_id: avail.experience_id,
+//           day_of_week: avail.day_of_week,
+//           time_slots: []
+//         };
+//         availabilityMap[avail.experience_id].push(dayAvailability);
+//       }
+      
+//       // Add time slot if it exists
+//       if (avail.slot_id) {
+//         dayAvailability.time_slots.push({
+//           slot_id: avail.slot_id,
+//           availability_id: avail.availability_id,
+//           start_time: avail.start_time,
+//           end_time: avail.end_time
+//         });
+//       }
+//     });
+
+//     // Attach tags, images, and availability to each experience
+//     experiences.forEach(exp => {
+//       exp.tags = exp.tags ? exp.tags.split(',') : [];
+//       exp.images = imageMap[exp.id] || [];
+//       exp.availability = availabilityMap[exp.id] || [];
+      
+//       // Add budget category based on price (this is now redundant since we filter by budget)
+//       if (exp.price === 0) {
+//         exp.budget_category = 'Free';
+//       } else if (exp.price <= 500) {
+//         exp.budget_category = 'Budget-friendly';
+//       } else if (exp.price <= 2000) {
+//         exp.budget_category = 'Mid-range';
+//       } else {
+//         exp.budget_category = 'Premium';
+//       }
+//     });
+//     // For debugging
+//     console.log('Query:', query);
+//     console.log('Params:', params);
+//     console.log('Found experiences:', experiences.length);
+
+//     res.status(200).json(experiences);
+
+//    } catch (error) {
+//     console.error('Error fetching experiences:', error);
+//     res.status(500).json({ message: 'Failed to fetch experiences' });
+//   }
+// };
 
 
 // const getAllExperience = async (req, res) => {
