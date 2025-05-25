@@ -8,6 +8,8 @@ router.post('/create', itineraryController.createItinerary);
 // Route to get all itineraries for a specific traveler
 router.get('/traveler/:traveler_id', itineraryController.getItineraryByTraveler);
 
+router.get('/:itinerary_id/items', itineraryController.getItineraryItems);
+
 // Route to get a specific itinerary by itinerary_id
 // router.get('/:itinerary_id', itineraryController.getItineraryById);
 
