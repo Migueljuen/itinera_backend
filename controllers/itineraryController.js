@@ -83,29 +83,60 @@ const getItineraryByTraveler = async (req, res) => {
   }
 
   try {
-    const [itinerary] = await db.query(
+    const [itineraries] = await db.query(
       'SELECT * FROM itinerary WHERE traveler_id = ?',
       [traveler_id]
     );
 
-    if (itinerary.length === 0) {
+    if (itineraries.length === 0) {
       return res.status(404).json({ message: 'No itinerary found for this traveler' });
     }
 
-    // Format the dates using Day.js
-    const formattedItinerary = itinerary.map(item => ({
-      ...item,
-      start_date: dayjs(item.start_date).format('YYYY-MM-DD'),
-      end_date: dayjs(item.end_date).format('YYYY-MM-DD'),
-      created_at: dayjs(item.created_at).format('YYYY-MM-DD HH:mm:ss')
-    }));
+    // Fetch items for each itinerary
+    const detailedItineraries = await Promise.all(
+      itineraries.map(async (itinerary) => {
+        // Format the dates
+        const formattedItinerary = {
+          ...itinerary,
+          start_date: dayjs(itinerary.start_date).format('YYYY-MM-DD'),
+          end_date: dayjs(itinerary.end_date).format('YYYY-MM-DD'),
+          created_at: dayjs(itinerary.created_at).format('YYYY-MM-DD HH:mm:ss')
+        };
 
-    res.status(200).json({ itinerary: formattedItinerary });
+        // Get items for the current itinerary
+        const [items] = await db.query(
+          `SELECT 
+             ii.item_id,
+             ii.experience_id,
+             ii.day_number,
+             ii.start_time,
+             ii.end_time,
+             ii.custom_note,
+             ii.created_at,
+             ii.updated_at,
+             e.title AS experience_name, 
+             e.description AS experience_description
+           FROM itinerary_items ii
+           LEFT JOIN experience e ON ii.experience_id = e.experience_id
+           WHERE ii.itinerary_id = ?
+           ORDER BY ii.day_number, ii.start_time`,
+          [itinerary.itinerary_id]
+        );
+
+        return {
+          ...formattedItinerary,
+          items
+        };
+      })
+    );
+
+    res.status(200).json({ itineraries: detailedItineraries });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
   }
 };
+
 
 
 const getItineraryItems = async (req, res) => {

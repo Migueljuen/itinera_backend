@@ -370,12 +370,6 @@ if (explore_time) {
 }
 
 
-    // // Specific time range filtering
-    // if (start_time && end_time) {
-    //   conditions.push(`TIME(ts.start_time) >= TIME(?) AND TIME(ts.end_time) <= TIME(?)`);
-    //   params.push(start_time, end_time);
-    // }
-
     // Budget filter
     if (budget) {
       let budgetCondition = '';
