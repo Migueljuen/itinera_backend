@@ -318,7 +318,31 @@ const getAllExperience = async (req, res) => {
       end_time
     } = req.query;
 
-    // Base query for experiences
+    console.log('=== API REQUEST DEBUG ===');
+    console.log('Query params:', req.query);
+
+    let tripDayNames = [];
+    if (start_date && end_date) {
+     const [startYear, startMonth, startDay] = start_date.split('-');
+const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseInt(startDay));
+      const endDate = new Date(end_date);
+      const tripDaysOfWeek = [];
+
+      const currentDate = new Date(startDate);
+      while (currentDate <= endDate) {
+        tripDaysOfWeek.push(currentDate.getDay());
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      tripDayNames = [...new Set(tripDaysOfWeek.map(dayNum => dayNames[dayNum]))];
+    }
+
+    console.log('=== FILTERING DEBUG ===');
+    console.log('Start date:', start_date);
+    console.log('End date:', end_date);
+    console.log('Trip day names:', tripDayNames);
+
     let query = `
       SELECT 
         e.experience_id AS id,
@@ -334,26 +358,60 @@ const getAllExperience = async (req, res) => {
       JOIN destination d ON e.destination_id = d.destination_id
       LEFT JOIN experience_tags et ON e.experience_id = et.experience_id
       LEFT JOIN tags t ON et.tag_id = t.tag_id
-      LEFT JOIN experience_availability a ON e.experience_id = a.experience_id
-      LEFT JOIN availability_time_slots ts ON a.availability_id = ts.availability_id
     `;
 
     const params = [];
     const conditions = [];
 
-    // Location filter
+    // Build the query structure first, then add parameters in the right order
+    let hasDateFilter = start_date && end_date && tripDayNames.length > 0;
+    
+    // Always use LEFT JOIN for availability data
+    query += `
+      LEFT JOIN experience_availability a ON e.experience_id = a.experience_id
+      LEFT JOIN availability_time_slots ts ON a.availability_id = ts.availability_id
+    `;
+
+    // Now add other conditions and their parameters
     if (location) {
       conditions.push(`LOWER(d.city) LIKE ?`);
       params.push(`%${location.trim().toLowerCase()}%`);
     }
 
-    // Travel companion filter
     if (travel_companion) {
       conditions.push(`LOWER(e.travel_companion) = LOWER(?)`);
       params.push(travel_companion.trim());
     }
 
-    // Explore time filter (based on hour of ts.start_time)
+    // Add date filter as a WHERE condition instead of JOIN condition
+    if (hasDateFilter) {
+      conditions.push(`e.experience_id IN (
+        SELECT DISTINCT ea.experience_id 
+        FROM experience_availability ea 
+        WHERE ea.day_of_week IN (${tripDayNames.map(() => '?').join(',')})
+      )`);
+      params.push(...tripDayNames);
+      
+      // DEBUG: Let's see which experiences match the date filter
+      console.log('=== DATE FILTER DEBUG ===');
+      const debugQuery = `
+        SELECT DISTINCT ea.experience_id, ea.day_of_week
+        FROM experience_availability ea 
+        WHERE ea.day_of_week IN (${tripDayNames.map(() => '?').join(',')})
+        ORDER BY ea.experience_id, ea.day_of_week
+      `;
+      try {
+        const [debugResults] = await db.query(debugQuery, tripDayNames);
+        console.log('Experiences matching date filter:', debugResults);
+        
+        // Specifically check experience ID 4
+        const exp4Results = debugResults.filter(r => r.experience_id === 4);
+        console.log('Experience ID 4 availability:', exp4Results);
+      } catch (debugError) {
+        console.log('Debug query error:', debugError);
+      }
+    }
+
     if (explore_time) {
       switch (explore_time.toLowerCase()) {
         case 'daytime':
@@ -362,36 +420,26 @@ const getAllExperience = async (req, res) => {
         case 'nighttime':
           conditions.push('HOUR(ts.start_time) >= 18');
           break;
-        case 'both':
-        default:
-          // No filter
-          break;
       }
     }
 
-    // Budget filter
     if (budget) {
-      let budgetCondition = '';
       switch (budget.toLowerCase()) {
         case 'free':
-          budgetCondition = 'e.price = 0';
+          conditions.push('e.price = 0');
           break;
         case 'budget-friendly':
-          budgetCondition = 'e.price <= 500';
+          conditions.push('e.price <= 500');
           break;
         case 'mid-range':
-          budgetCondition = 'e.price > 500 AND e.price <= 2000';
+          conditions.push('e.price > 500 AND e.price <= 2000');
           break;
         case 'premium':
-          budgetCondition = 'e.price > 2000';
+          conditions.push('e.price > 2000');
           break;
-      }
-      if (budgetCondition) {
-        conditions.push(budgetCondition);
       }
     }
 
-    // Tag filtering
     if (tags) {
       const tagArray = Array.isArray(tags) ? tags : tags.split(',');
       const cleanedTags = tagArray.map(tag => tag.trim());
@@ -406,67 +454,27 @@ const getAllExperience = async (req, res) => {
       }
     }
 
-    // Date range filtering (day_of_week) - ADD THIS TO CONDITIONS ARRAY
-    if (start_date && end_date) {
-      const startDate = new Date(start_date);
-      const endDate = new Date(end_date);
-      const tripDaysOfWeek = [];
-
-      // Debug logging
-      console.log('Date filtering:', { start_date, end_date, startDate, endDate });
-
-      for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-        tripDaysOfWeek.push(d.getDay());
-      }
-
-      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-      const tripDayNames = [...new Set(tripDaysOfWeek.map(dayNum => dayNames[dayNum]))];
-
-      console.log('Trip days:', tripDayNames);
-
-      // Add this as a regular condition
-      conditions.push(`e.experience_id IN (
-        SELECT DISTINCT a2.experience_id 
-        FROM experience_availability a2
-        JOIN availability_time_slots ts2 ON a2.availability_id = ts2.availability_id
-        WHERE a2.day_of_week IN (${tripDayNames.map(() => '?').join(',')})
-        AND ts2.start_time IS NOT NULL
-      )`);
-
-      params.push(...tripDayNames);
-    }
-
-    // Apply WHERE clause - this now happens AFTER all conditions are added
     if (conditions.length > 0) {
       query += ` WHERE ${conditions.join(' AND ')}`;
     }
 
-    // Finalize with GROUP BY
     query += ` GROUP BY e.experience_id`;
 
-    // Debug logging
-    console.log('Final Query:', query);
-    console.log('Final Params:', params);
+    console.log('Final query:', query);
+    console.log('Parameters:', params);
 
-    // Execute the query
     const [experiences] = await db.query(query, params);
 
-    // Rest of your code remains the same...
-    // Fetch images
     const [images] = await db.query(`
-      SELECT 
-        experience_id,
-        image_url
+      SELECT experience_id, image_url
       FROM experience_images
     `);
 
-    // Get all experience IDs
     const experienceIds = experiences.map(exp => exp.id);
 
-    // Fetch availability for these IDs
     let availabilityResults = [];
     if (experienceIds.length > 0) {
-      const [results] = await db.query(`
+      let availabilityQuery = `
         SELECT 
           a.experience_id,
           a.availability_id,
@@ -477,27 +485,36 @@ const getAllExperience = async (req, res) => {
         FROM experience_availability a
         JOIN availability_time_slots ts ON a.availability_id = ts.availability_id
         WHERE a.experience_id IN (?)
-      `, [experienceIds]);
+      `;
+      
+      let availabilityParams = [experienceIds];
+      
+      // Apply the same day filter if we have trip days
+      if (hasDateFilter) {
+        const dayPlaceholders = tripDayNames.map(() => '?').join(',');
+        availabilityQuery += ` AND a.day_of_week IN (${dayPlaceholders})`;
+        availabilityParams.push(...tripDayNames);
+      }
+      
+      availabilityQuery += ` ORDER BY a.experience_id, a.day_of_week, ts.start_time`;
+      
+      const [results] = await db.query(availabilityQuery, availabilityParams);
       availabilityResults = results;
     }
 
-    // Map images
     const imageMap = {};
     images.forEach(img => {
       if (!imageMap[img.experience_id]) {
         imageMap[img.experience_id] = [];
       }
-
       let webPath = img.image_url;
       if (webPath.includes(':\\') || webPath.includes('\\')) {
         const filename = webPath.split('\\').pop();
         webPath = `uploads/experience/${filename}`;
       }
-
       imageMap[img.experience_id].push(webPath);
     });
 
-    // Map availability
     const availabilityMap = {};
     availabilityResults.forEach(avail => {
       if (!availabilityMap[avail.experience_id]) {
@@ -528,7 +545,6 @@ const getAllExperience = async (req, res) => {
       }
     });
 
-    // Attach data
     experiences.forEach(exp => {
       exp.tags = exp.tags ? exp.tags.split(',') : [];
       exp.images = imageMap[exp.id] || [];
@@ -546,6 +562,7 @@ const getAllExperience = async (req, res) => {
     });
 
     console.log('Found experiences:', experiences.length);
+    console.log('Experience IDs:', experiences.map(e => e.id));
 
     res.status(200).json(experiences);
 
@@ -554,6 +571,7 @@ const getAllExperience = async (req, res) => {
     res.status(500).json({ message: 'Failed to fetch experiences' });
   }
 };
+
 
 // const getAllExperience = async (req, res) => {
 //   try {
