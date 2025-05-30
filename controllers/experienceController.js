@@ -354,21 +354,20 @@ const getAllExperience = async (req, res) => {
     }
 
     // Explore time filter (based on hour of ts.start_time)
-if (explore_time) {
-  switch (explore_time.toLowerCase()) {
-    case 'daytime':
-      conditions.push('HOUR(ts.start_time) < 18');
-      break;
-    case 'nighttime':
-      conditions.push('HOUR(ts.start_time) >= 18');
-      break;
-    case 'both':
-    default:
-      // No filter
-      break;
-  }
-}
-
+    if (explore_time) {
+      switch (explore_time.toLowerCase()) {
+        case 'daytime':
+          conditions.push('HOUR(ts.start_time) < 18');
+          break;
+        case 'nighttime':
+          conditions.push('HOUR(ts.start_time) >= 18');
+          break;
+        case 'both':
+        default:
+          // No filter
+          break;
+      }
+    }
 
     // Budget filter
     if (budget) {
@@ -407,16 +406,14 @@ if (explore_time) {
       }
     }
 
-    // Apply WHERE clause
-    if (conditions.length > 0) {
-      query += ` WHERE ${conditions.join(' AND ')}`;
-    }
-
-    // Date range filtering (day_of_week)
+    // Date range filtering (day_of_week) - ADD THIS TO CONDITIONS ARRAY
     if (start_date && end_date) {
       const startDate = new Date(start_date);
       const endDate = new Date(end_date);
       const tripDaysOfWeek = [];
+
+      // Debug logging
+      console.log('Date filtering:', { start_date, end_date, startDate, endDate });
 
       for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
         tripDaysOfWeek.push(d.getDay());
@@ -425,26 +422,36 @@ if (explore_time) {
       const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       const tripDayNames = [...new Set(tripDaysOfWeek.map(dayNum => dayNames[dayNum]))];
 
-      const dateCondition = `
-        ${conditions.length > 0 ? 'AND' : 'WHERE'} e.experience_id IN (
-          SELECT DISTINCT a2.experience_id 
-          FROM experience_availability a2
-          JOIN availability_time_slots ts2 ON a2.availability_id = ts2.availability_id
-          WHERE a2.day_of_week IN (${tripDayNames.map(() => '?').join(',')})
-          AND ts2.start_time IS NOT NULL
-        )
-      `;
+      console.log('Trip days:', tripDayNames);
 
-      query += dateCondition;
+      // Add this as a regular condition
+      conditions.push(`e.experience_id IN (
+        SELECT DISTINCT a2.experience_id 
+        FROM experience_availability a2
+        JOIN availability_time_slots ts2 ON a2.availability_id = ts2.availability_id
+        WHERE a2.day_of_week IN (${tripDayNames.map(() => '?').join(',')})
+        AND ts2.start_time IS NOT NULL
+      )`);
+
       params.push(...tripDayNames);
+    }
+
+    // Apply WHERE clause - this now happens AFTER all conditions are added
+    if (conditions.length > 0) {
+      query += ` WHERE ${conditions.join(' AND ')}`;
     }
 
     // Finalize with GROUP BY
     query += ` GROUP BY e.experience_id`;
 
+    // Debug logging
+    console.log('Final Query:', query);
+    console.log('Final Params:', params);
+
     // Execute the query
     const [experiences] = await db.query(query, params);
 
+    // Rest of your code remains the same...
     // Fetch images
     const [images] = await db.query(`
       SELECT 
@@ -538,8 +545,6 @@ if (explore_time) {
       }
     });
 
-    console.log('Query:', query);
-    console.log('Params:', params);
     console.log('Found experiences:', experiences.length);
 
     res.status(200).json(experiences);
@@ -549,7 +554,6 @@ if (explore_time) {
     res.status(500).json({ message: 'Failed to fetch experiences' });
   }
 };
-
 
 // const getAllExperience = async (req, res) => {
 //   try {
