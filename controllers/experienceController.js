@@ -53,7 +53,7 @@ const createExperience = async (req, res) => {
 
   try {
     // Validate experience required fields
-    if (!creator_id || !title || !description || !price || !unit) {
+    if (!creator_id ||  !price || !unit) {
       await connection.rollback();
       return res.status(400).json({ message: 'All experience fields are required' });
     }
@@ -147,9 +147,9 @@ const createExperience = async (req, res) => {
     // Insert new experience with status
 const [result] = await connection.query(
   `INSERT INTO experience 
-  (creator_id, destination_id, title, description, price, unit, status, travel_companion, created_at) 
+  (creator_id, destination_id, title , description, price, unit, status, travel_companion, created_at) 
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURDATE())`,
-  [creator_id, finalDestinationId, title, description, price, unit, experienceStatus, travel_companion]
+  [creator_id, finalDestinationId, title || null, description || null, price, unit, experienceStatus, travel_companion]
 );
 
     const experience_id = result.insertId;
