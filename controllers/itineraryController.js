@@ -1,6 +1,6 @@
 const dayjs = require('dayjs');  // Import Day.js
 const db = require('../config/db.js');
-
+const path = require('path');
 const createItinerary = async (req, res) => {
   const { traveler_id, start_date, end_date, title, notes, items } = req.body;
 
@@ -74,7 +74,6 @@ const createItinerary = async (req, res) => {
 
 
 
-// Get itinerary by traveler ID
 const getItineraryByTraveler = async (req, res) => {
   const { traveler_id } = req.params;
 
@@ -103,7 +102,7 @@ const getItineraryByTraveler = async (req, res) => {
           created_at: dayjs(itinerary.created_at).format('YYYY-MM-DD HH:mm:ss')
         };
 
-        // Get items for the current itinerary
+        // Get items for the current itinerary with experience details and destination
         const [items] = await db.query(
           `SELECT 
              ii.item_id,
@@ -115,28 +114,73 @@ const getItineraryByTraveler = async (req, res) => {
              ii.created_at,
              ii.updated_at,
              e.title AS experience_name, 
-             e.description AS experience_description
+             e.description AS experience_description,
+             d.name AS destination_name,
+             d.city AS destination_city
            FROM itinerary_items ii
            LEFT JOIN experience e ON ii.experience_id = e.experience_id
+           LEFT JOIN destination d ON e.destination_id = d.destination_id
            WHERE ii.itinerary_id = ?
            ORDER BY ii.day_number, ii.start_time`,
           [itinerary.itinerary_id]
         );
 
+        // Fetch images for each experience in the items
+        const itemsWithImages = await Promise.all(
+          items.map(async (item) => {
+            if (item.experience_id) {
+              try {
+                // Fetch images for this experience
+                const [imageRows] = await db.query(
+                  `SELECT image_url FROM experience_images WHERE experience_id = ?`,
+                  [item.experience_id]
+                );
+                
+                // Convert file system paths to URLs
+                const images = imageRows.map(img => {
+                  // Extract just the filename from the absolute path
+                  const filename = path.basename(img.image_url);
+                  // Return a relative URL path that your server can handle
+                  return `/uploads/experiences/${filename}`;
+                });
+
+                return {
+                  ...item,
+                  images: images,
+                  // Add the first image as primary image for easy access
+                  primary_image: images.length > 0 ? images[0] : null
+                };
+              } catch (imageError) {
+                console.error(`Error fetching images for experience ${item.experience_id}:`, imageError);
+                return {
+                  ...item,
+                  images: [],
+                  primary_image: null
+                };
+              }
+            } else {
+              return {
+                ...item,
+                images: [],
+                primary_image: null
+              };
+            }
+          })
+        );
+
         return {
           ...formattedItinerary,
-          items
+          items: itemsWithImages
         };
       })
     );
 
     res.status(200).json({ itineraries: detailedItineraries });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error' });
+    console.error('Error in getItineraryByTraveler:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
-
 
 
 const getItineraryItems = async (req, res) => {
