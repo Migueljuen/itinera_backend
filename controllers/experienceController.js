@@ -418,7 +418,7 @@ const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseI
           conditions.push('HOUR(ts.start_time) < 18');
           break;
         case 'nighttime':
-          conditions.push('HOUR(ts.start_time) >= 18');
+          conditions.push('HOUR(ts.start_time) >= 16');
           break;
       }
     }

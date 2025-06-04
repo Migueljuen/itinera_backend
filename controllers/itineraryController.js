@@ -1,6 +1,7 @@
 const dayjs = require('dayjs');  // Import Day.js
 const db = require('../config/db.js');
 const path = require('path');
+
 const createItinerary = async (req, res) => {
   const { traveler_id, start_date, end_date, title, notes, items } = req.body;
 
