@@ -183,6 +183,111 @@ const getItineraryByTraveler = async (req, res) => {
   }
 };
 
+const getItineraryById = async (req, res) => {
+  const { itinerary_id } = req.params;
+
+  if (!itinerary_id) {
+    return res.status(400).json({ message: 'Itinerary ID is required' });
+  }
+
+  try {
+    // Get the specific itinerary
+    const [itineraries] = await db.query(
+      'SELECT * FROM itinerary WHERE itinerary_id = ?',
+      [itinerary_id]
+    );
+
+    if (itineraries.length === 0) {
+      return res.status(404).json({ message: 'Itinerary not found' });
+    }
+
+    const itinerary = itineraries[0];
+
+    // Format the dates
+    const formattedItinerary = {
+      ...itinerary,
+      start_date: dayjs(itinerary.start_date).format('YYYY-MM-DD'),
+      end_date: dayjs(itinerary.end_date).format('YYYY-MM-DD'),
+      created_at: dayjs(itinerary.created_at).format('YYYY-MM-DD HH:mm:ss')
+    };
+
+    // Get items for the itinerary with experience details and destination
+    const [items] = await db.query(
+      `SELECT 
+         ii.item_id,
+         ii.experience_id,
+         ii.day_number,
+         ii.start_time,
+         ii.end_time,
+         ii.custom_note,
+         ii.created_at,
+         ii.updated_at,
+         e.title AS experience_name, 
+         e.description AS experience_description,
+         d.name AS destination_name,
+         d.city AS destination_city
+       FROM itinerary_items ii
+       LEFT JOIN experience e ON ii.experience_id = e.experience_id
+       LEFT JOIN destination d ON e.destination_id = d.destination_id
+       WHERE ii.itinerary_id = ?
+       ORDER BY ii.day_number, ii.start_time`,
+      [itinerary_id]
+    );
+
+    // Fetch images for each experience in the items
+    const itemsWithImages = await Promise.all(
+      items.map(async (item) => {
+        if (item.experience_id) {
+          try {
+            // Fetch images for this experience
+            const [imageRows] = await db.query(
+              `SELECT image_url FROM experience_images WHERE experience_id = ?`,
+              [item.experience_id]
+            );
+            
+            // Convert file system paths to URLs
+            const images = imageRows.map(img => {
+              // Extract just the filename from the absolute path
+              const filename = path.basename(img.image_url);
+              // Return a relative URL path that your server can handle
+              return `/uploads/experiences/${filename}`;
+            });
+
+            return {
+              ...item,
+              images: images,
+              // Add the first image as primary image for easy access
+              primary_image: images.length > 0 ? images[0] : null
+            };
+          } catch (imageError) {
+            console.error(`Error fetching images for experience ${item.experience_id}:`, imageError);
+            return {
+              ...item,
+              images: [],
+              primary_image: null
+            };
+          }
+        } else {
+          return {
+            ...item,
+            images: [],
+            primary_image: null
+          };
+        }
+      })
+    );
+
+    const detailedItinerary = {
+      ...formattedItinerary,
+      items: itemsWithImages
+    };
+
+    res.status(200).json({ itinerary: detailedItinerary });
+  } catch (err) {
+    console.error('Error in getItineraryById:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
+  }
+};
 
 const getItineraryItems = async (req, res) => {
   const { itinerary_id } = req.params;
@@ -266,6 +371,7 @@ const deleteItinerary = async (req, res) => {
 module.exports = {
   createItinerary,
   getItineraryByTraveler,
+  getItineraryById,
   getItineraryItems,
   updateItinerary,
   deleteItinerary,
