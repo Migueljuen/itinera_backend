@@ -5,6 +5,7 @@ const generateItineraryController = require('../controllers/generateItineraryCon
 // Route to create a new itinerary
 router.post('/create', itineraryController.createItinerary);
 router.post('/generate', generateItineraryController.generateItinerary);
+router.post('/save', generateItineraryController.saveItinerary);
 
 // Route to get all itineraries for a specific traveler
 router.get('/traveler/:traveler_id', itineraryController.getItineraryByTraveler);

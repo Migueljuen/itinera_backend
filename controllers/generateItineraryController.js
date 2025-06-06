@@ -13,7 +13,7 @@ const generateItinerary = async (req, res) => {
     travel_companion, 
     explore_time, 
     budget,
-    activity_intensity, // NEW FIELD: 'low', 'moderate', 'high'
+    activity_intensity,
     title,
     notes
   } = req.body;
@@ -21,7 +21,7 @@ const generateItinerary = async (req, res) => {
   // Debug: Log the entire request body
   console.log('Request body received:', JSON.stringify(req.body, null, 2));
 
-  // Validate required fields (including new activity_intensity)
+  // Validate required fields
   if (!traveler_id || !start_date || !end_date || !experience_types || 
       !travel_companion || !explore_time || !budget || !activity_intensity) {
     return res.status(400).json({ 
@@ -81,29 +81,118 @@ const generateItinerary = async (req, res) => {
       experience_types,
       explore_time,
       travel_companion,
-      activity_intensity // Pass the new parameter
+      activity_intensity
     });
 
-    // Continue with existing itinerary creation logic...
     const itineraryTitle = title || `${city || 'Adventure'} - ${startDate.format('MMM DD')} to ${endDate.format('MMM DD, YYYY')}`;
-    
+
+    // Create the itinerary object for preview/generation
+    const previewItinerary = {
+      // Use a temporary ID for preview (negative number to distinguish from real IDs)
+      itinerary_id: -1,
+      traveler_id,
+      start_date,
+      end_date,
+      title: itineraryTitle,
+      notes: notes || 'Auto-generated itinerary',
+      created_at: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+      status: 'preview',
+      // Add experience details to each item for preview
+      items: await Promise.all(generatedItinerary.map(async (item) => {
+        // Get experience details
+        const [experienceRows] = await db.query(
+          `SELECT e.*, d.name as destination_name, d.city as destination_city,
+                  GROUP_CONCAT(ei.image_url) as images
+           FROM experience e
+           LEFT JOIN destination d ON e.destination_id = d.destination_id
+           LEFT JOIN experience_images ei ON e.experience_id = ei.experience_id
+           WHERE e.experience_id = ?
+           GROUP BY e.experience_id`,
+          [item.experience_id]
+        );
+
+        const experience = experienceRows[0];
+        const images = experience.images ? experience.images.split(',') : [];
+
+        return {
+          experience_id: item.experience_id,
+          day_number: item.day_number,
+          start_time: item.start_time,
+          end_time: item.end_time,
+          custom_note: item.auto_note || '',
+          experience_name: experience.name,
+          experience_description: experience.description,
+          destination_name: experience.destination_name,
+          destination_city: experience.destination_city,
+          images: images,
+          primary_image: images[0] || null,
+          price: experience.price,
+          unit: experience.unit
+        };
+      }))
+    };
+
+    return res.status(200).json({ 
+      message: 'Itinerary generated successfully',
+      itinerary_id: -1, // Temporary ID for preview
+      itineraries: [previewItinerary],
+      total_experiences: experiences.length,
+      selected_experiences: generatedItinerary.length,
+      activity_intensity: activity_intensity,
+      generated: true
+    });
+
+  } catch (err) {
+    console.error('Error generating itinerary:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
+  }
+};
+
+const saveItinerary = async (req, res) => {
+  const {
+    traveler_id,
+    start_date,
+    end_date,
+    title,
+    notes,
+    items // Array of itinerary items from preview
+  } = req.body;
+
+  // Validate required fields
+  if (!traveler_id || !start_date || !end_date || !title || !items || !Array.isArray(items)) {
+    return res.status(400).json({ 
+      message: 'Missing required fields for saving itinerary',
+      required: ['traveler_id', 'start_date', 'end_date', 'title', 'items']
+    });
+  }
+
+  try {
+    // Step 1: Create the itinerary record
     const [result] = await db.query(
       `INSERT INTO itinerary (traveler_id, start_date, end_date, title, notes, created_at, status)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [traveler_id, start_date, end_date, itineraryTitle, notes || 'Auto-generated itinerary', dayjs().format('YYYY-MM-DD HH:mm:ss'), 'upcoming']
+      [
+        traveler_id, 
+        start_date, 
+        end_date, 
+        title, 
+        notes || 'Auto-generated itinerary', 
+        dayjs().format('YYYY-MM-DD HH:mm:ss'), 
+        'upcoming'
+      ]
     );
 
     const itinerary_id = result.insertId;
 
-    // Step 4: Insert itinerary items
-    if (generatedItinerary.length > 0) {
-      const itemValues = generatedItinerary.map(item => [
+    // Step 2: Insert itinerary items
+    if (items.length > 0) {
+      const itemValues = items.map(item => [
         itinerary_id,
         item.experience_id,
         item.day_number,
         item.start_time,
         item.end_time,
-        item.auto_note || '',
+        item.custom_note || '',
         dayjs().format('YYYY-MM-DD HH:mm:ss'),
         dayjs().format('YYYY-MM-DD HH:mm:ss')
       ]);
@@ -116,125 +205,23 @@ const generateItinerary = async (req, res) => {
       );
     }
 
-    // Step 5: Return generated itinerary with full details
-    const fullItinerary = await getItineraryWithDetails(itinerary_id);
+    // Step 3: Return the saved itinerary with full details
+    const savedItinerary = await getItineraryWithDetails(itinerary_id);
 
-    res.status(201).json({ 
-      message: 'Itinerary generated successfully',
+    res.status(201).json({
+      message: 'Itinerary saved successfully',
       itinerary_id,
-      itineraries: [fullItinerary],
-      total_experiences: experiences.length,
-      selected_experiences: generatedItinerary.length,
-      activity_intensity: activity_intensity
+      itinerary: savedItinerary
     });
 
   } catch (err) {
-    console.error('Error generating itinerary:', err);
+    console.error('Error saving itinerary:', err);
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
-// Function 1: Generate itinerary (preview only)
-const itineraryPreview = async (req, res) => {
-  const { 
-    city,
-    start_date, 
-    end_date, 
-    experience_types,
-    travel_companion, 
-    explore_time, 
-    budget,
-    activity_intensity,
-    title
-  } = req.body;
 
-  // Debug: Log the entire request body
-  console.log('Request body received:', JSON.stringify(req.body, null, 2));
-
-  // Validate required fields
-  if (!start_date || !end_date || !experience_types || 
-      !travel_companion || !explore_time || !budget || !activity_intensity) {
-    return res.status(400).json({ 
-      message: 'All preference fields are required for itinerary generation',
-      missing_fields: {
-        start_date: !start_date,
-        end_date: !end_date,
-        experience_types: !experience_types,
-        travel_companion: !travel_companion,
-        explore_time: !explore_time,
-        budget: !budget,
-        activity_intensity: !activity_intensity
-      }
-    });
-  }
-
-  // Validate activity_intensity values
-  const validIntensities = ['low', 'moderate', 'high'];
-  if (!validIntensities.includes(activity_intensity.toLowerCase())) {
-    return res.status(400).json({ 
-      message: 'Invalid activity_intensity. Must be: low, moderate, or high' 
-    });
-  }
-
-  try {
-    const startDate = dayjs(start_date);
-    const endDate = dayjs(end_date);
-
-    if (startDate.isAfter(endDate)) {
-      return res.status(400).json({ message: 'Start date cannot be after end date' });
-    }
-
-    const totalDays = endDate.diff(startDate, 'day') + 1;
-
-    // Step 1: Get suitable experiences based on preferences
-    const experiences = await getFilteredExperiences({
-      city,
-      experience_types,
-      travel_companion,
-      explore_time,
-      budget,
-      start_date,
-      end_date
-    });
-
-    console.log('Found experiences:', experiences.length);
-
-    if (experiences.length === 0) {
-      return res.status(404).json({ message: 'No suitable experiences found for your preferences' });
-    }
-
-    // Step 2: Generate smart itinerary distribution with activity intensity
-    const generatedItinerary = await smartItineraryGeneration({
-      experiences,
-      totalDays,
-      experience_types,
-      explore_time,
-      travel_companion,
-      activity_intensity
-    });
-
-    // Generate title for preview
-    const itineraryTitle = title || `${city || 'Adventure'} - ${startDate.format('MMM DD')} to ${endDate.format('MMM DD, YYYY')}`;
-    
-    // Return generated itinerary for preview (NOT SAVED)
-    res.status(200).json({ 
-      message: 'Itinerary generated successfully',
-      preview: true,
-      itinerary_data: {
-        title: itineraryTitle,
-        start_date,
-        end_date,
-        items: generatedItinerary,
-        total_experiences: experiences.length,
-        selected_experiences: generatedItinerary.length,
-        activity_intensity: activity_intensity
-      }
-    });
-
-  } catch (err) {
-    console.error('Error generating itinerary preview:', err);
-    res.status(500).json({ error: 'Server error', details: err.message });
-  }
-};
+// Don't forget to add this route to your router
+// router.post('/itinerary/save', saveItinerary);
 
 // Helper function to filter experiences based on preferences - FIXED VERSION
 const getFilteredExperiences = async ({
@@ -819,4 +806,4 @@ const getItineraryWithDetails = async (itinerary_id) => {
   }
 };
 
-module.exports = { generateItinerary };
+module.exports = { generateItinerary, saveItinerary };
