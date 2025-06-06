@@ -133,6 +133,108 @@ const generateItinerary = async (req, res) => {
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
+// Function 1: Generate itinerary (preview only)
+const itineraryPreview = async (req, res) => {
+  const { 
+    city,
+    start_date, 
+    end_date, 
+    experience_types,
+    travel_companion, 
+    explore_time, 
+    budget,
+    activity_intensity,
+    title
+  } = req.body;
+
+  // Debug: Log the entire request body
+  console.log('Request body received:', JSON.stringify(req.body, null, 2));
+
+  // Validate required fields
+  if (!start_date || !end_date || !experience_types || 
+      !travel_companion || !explore_time || !budget || !activity_intensity) {
+    return res.status(400).json({ 
+      message: 'All preference fields are required for itinerary generation',
+      missing_fields: {
+        start_date: !start_date,
+        end_date: !end_date,
+        experience_types: !experience_types,
+        travel_companion: !travel_companion,
+        explore_time: !explore_time,
+        budget: !budget,
+        activity_intensity: !activity_intensity
+      }
+    });
+  }
+
+  // Validate activity_intensity values
+  const validIntensities = ['low', 'moderate', 'high'];
+  if (!validIntensities.includes(activity_intensity.toLowerCase())) {
+    return res.status(400).json({ 
+      message: 'Invalid activity_intensity. Must be: low, moderate, or high' 
+    });
+  }
+
+  try {
+    const startDate = dayjs(start_date);
+    const endDate = dayjs(end_date);
+
+    if (startDate.isAfter(endDate)) {
+      return res.status(400).json({ message: 'Start date cannot be after end date' });
+    }
+
+    const totalDays = endDate.diff(startDate, 'day') + 1;
+
+    // Step 1: Get suitable experiences based on preferences
+    const experiences = await getFilteredExperiences({
+      city,
+      experience_types,
+      travel_companion,
+      explore_time,
+      budget,
+      start_date,
+      end_date
+    });
+
+    console.log('Found experiences:', experiences.length);
+
+    if (experiences.length === 0) {
+      return res.status(404).json({ message: 'No suitable experiences found for your preferences' });
+    }
+
+    // Step 2: Generate smart itinerary distribution with activity intensity
+    const generatedItinerary = await smartItineraryGeneration({
+      experiences,
+      totalDays,
+      experience_types,
+      explore_time,
+      travel_companion,
+      activity_intensity
+    });
+
+    // Generate title for preview
+    const itineraryTitle = title || `${city || 'Adventure'} - ${startDate.format('MMM DD')} to ${endDate.format('MMM DD, YYYY')}`;
+    
+    // Return generated itinerary for preview (NOT SAVED)
+    res.status(200).json({ 
+      message: 'Itinerary generated successfully',
+      preview: true,
+      itinerary_data: {
+        title: itineraryTitle,
+        start_date,
+        end_date,
+        items: generatedItinerary,
+        total_experiences: experiences.length,
+        selected_experiences: generatedItinerary.length,
+        activity_intensity: activity_intensity
+      }
+    });
+
+  } catch (err) {
+    console.error('Error generating itinerary preview:', err);
+    res.status(500).json({ error: 'Server error', details: err.message });
+  }
+};
 
 // Helper function to filter experiences based on preferences - FIXED VERSION
 const getFilteredExperiences = async ({
