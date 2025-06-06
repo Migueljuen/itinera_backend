@@ -153,22 +153,47 @@ const getFilteredExperiences = async ({
       budget
     });
 
-    // Calculate trip day names for availability filtering (like in getAllExperience)
+    // Calculate trip day names for availability filtering (FIXED VERSION)
     let tripDayNames = [];
     if (start_date && end_date) {
-      const [startYear, startMonth, startDay] = start_date.split('-');
-      const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseInt(startDay));
-      const endDate = new Date(end_date);
-      const tripDaysOfWeek = [];
-
-      const currentDate = new Date(startDate);
-      while (currentDate <= endDate) {
-        tripDaysOfWeek.push(currentDate.getDay());
-        currentDate.setDate(currentDate.getDate() + 1);
+      try {
+        // Parse both dates consistently
+        const [startYear, startMonth, startDay] = start_date.split('-');
+        const [endYear, endMonth, endDay] = end_date.split('-');
+        
+        const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseInt(startDay));
+        const endDate = new Date(parseInt(endYear), parseInt(endMonth) - 1, parseInt(endDay));
+        
+        console.log('Date range:', { 
+          start_date, 
+          end_date, 
+          startDate: startDate.toDateString(), 
+          endDate: endDate.toDateString() 
+        });
+        
+        const tripDaysOfWeek = [];
+        const currentDate = new Date(startDate);
+        
+        // Add safety check to prevent infinite loop
+        let dayCount = 0;
+        const maxDays = 365;
+        
+        while (currentDate <= endDate && dayCount < maxDays) {
+          tripDaysOfWeek.push(currentDate.getDay());
+          currentDate.setDate(currentDate.getDate() + 1);
+          dayCount++;
+        }
+        
+        const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        tripDayNames = [...new Set(tripDaysOfWeek.map(dayNum => dayNames[dayNum]))];
+        
+        console.log('Trip days of week (numbers):', tripDaysOfWeek);
+        console.log('Trip day names:', tripDayNames);
+        
+      } catch (error) {
+        console.error('Error calculating trip day names:', error);
+        tripDayNames = []; // Default to empty array on error
       }
-
-      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-      tripDayNames = [...new Set(tripDaysOfWeek.map(dayNum => dayNames[dayNum]))];
     }
 
     console.log('Trip day names:', tripDayNames);
@@ -235,7 +260,7 @@ const getFilteredExperiences = async ({
     if (explore_time && explore_time !== 'Both') {
       switch (explore_time.toLowerCase()) {
         case 'daytime':
-          conditions.push('HOUR(ts.start_time) < 18');
+          conditions.push('HOUR(ts.start_time) < 20');
           break;
         case 'nighttime':
           conditions.push('HOUR(ts.start_time) >= 16');
@@ -253,7 +278,7 @@ const getFilteredExperiences = async ({
           conditions.push('e.price <= 500');
           break;
         case 'mid-range':
-          conditions.push('e.price > 500 AND e.price <= 2000');
+          conditions.push('e.price <= 2000');
           break;
         case 'premium':
           conditions.push('e.price > 2000');
