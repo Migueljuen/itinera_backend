@@ -75,14 +75,15 @@ const generateItinerary = async (req, res) => {
     }
 
     // Step 2: Generate smart itinerary distribution with activity intensity
-    const generatedItinerary = await smartItineraryGeneration({
-      experiences,
-      totalDays,
-      experience_types,
-      explore_time,
-      travel_companion,
-      activity_intensity
-    });
+const generatedItinerary = await smartItineraryGeneration({
+  experiences,
+  totalDays,
+  experience_types,
+  explore_time,
+  travel_companion,
+  activity_intensity,
+  start_date 
+});
 
     const itineraryTitle = title || `${city || 'Adventure'} - ${startDate.format('MMM DD')} to ${endDate.format('MMM DD, YYYY')}`;
 
@@ -223,9 +224,176 @@ const saveItinerary = async (req, res) => {
 // Don't forget to add this route to your router
 // router.post('/itinerary/save', saveItinerary);
 
-// Helper function to filter experiences based on preferences - FIXED VERSION
+
+// Helper function to check experience availability - SIMPLIFIED
+const checkExperienceAvailability = async (experience_id, start_date, end_date, explore_time) => {
+  try {
+    const [availability] = await db.query(`
+      SELECT day_of_week, start_time, end_time
+      FROM experience_availability
+      WHERE experience_id = ?
+    `, [experience_id]);
+
+    // If no availability records, assume it's available (or set default policy)
+    if (availability.length === 0) {
+      console.log(`No availability records for experience ${experience_id}, defaulting to available`);
+      return true;
+    }
+
+    // Check if experience matches explore_time preference
+    const hasMatchingTimeSlots = availability.some(slot => {
+      const startHour = parseInt(slot.start_time.split(':')[0]);
+      const endHour = parseInt(slot.end_time.split(':')[0]);
+      
+      const isDaytime = startHour >= 6 && endHour <= 18;
+      const isNighttime = startHour >= 18 || endHour <= 6;
+      
+      switch (explore_time) {
+        case 'Daytime':
+          return isDaytime;
+        case 'Nighttime':
+          return isNighttime;
+        case 'Both':
+        default:
+          return true;
+      }
+    });
+
+    return hasMatchingTimeSlots;
+
+  } catch (error) {
+    console.error('Error checking availability:', error);
+    // Default to available on error to prevent blocking all experiences
+    return true;
+  }
+};
+
+// Enhanced helper function to get experience with its actual availability time slots
+const getExperienceWithAvailability = async (experience_id, day_of_week) => {
+  try {
+    const [availability] = await db.query(`
+      SELECT DISTINCT 
+        ea.day_of_week, 
+        ats.start_time, 
+        ats.end_time,
+        ea.availability_id
+      FROM experience_availability ea
+      JOIN availability_time_slots ats ON ea.availability_id = ats.availability_id
+      WHERE ea.experience_id = ? AND ea.day_of_week = ?
+      ORDER BY ats.start_time
+    `, [experience_id, day_of_week]);
+
+    return availability;
+  } catch (error) {
+    console.error('Error getting experience availability:', error);
+    return [];
+  }
+};
+
+// Enhanced smart itinerary generation that respects actual time slots
+const smartItineraryGeneration = async ({
+  experiences,
+  totalDays,
+  experience_types,
+  explore_time,
+  travel_companion,
+  activity_intensity,
+  start_date
+}) => {
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const itinerary = [];
+  
+  // Determine experiences per day based on activity intensity
+  const experiencesPerDay = {
+    'low': 2,
+    'moderate': 3,
+    'high': 4
+  }[activity_intensity.toLowerCase()] || 2;
+
+  // Parse start date to get day of week for each day
+  const startDate = dayjs(start_date);
+  
+  for (let day = 1; day <= totalDays; day++) {
+    const currentDate = startDate.add(day - 1, 'day');
+    const dayOfWeek = dayNames[currentDate.day()];
+    
+    console.log(`Planning day ${day} (${dayOfWeek})`);
+    
+    // Filter experiences available on this day of week with their time slots
+    const availableExperiences = [];
+    
+    for (const experience of experiences) {
+      const timeSlots = await getExperienceWithAvailability(experience.experience_id, dayOfWeek);
+      
+      if (timeSlots.length > 0) {
+        // Filter time slots based on explore_time preference
+        const filteredTimeSlots = timeSlots.filter(slot => {
+          const startHour = parseInt(slot.start_time.split(':')[0]);
+          
+          switch (explore_time) {
+            case 'Daytime':
+              return startHour >= 6 && startHour < 18;
+            case 'Nighttime':
+              return startHour >= 18 || startHour < 6;
+            case 'Both':
+            default:
+              return true;
+          }
+        });
+        
+        if (filteredTimeSlots.length > 0) {
+          availableExperiences.push({
+            ...experience,
+            availableTimeSlots: filteredTimeSlots
+          });
+        }
+      }
+    }
+    
+    console.log(`Available experiences for ${dayOfWeek}:`, availableExperiences.length);
+    
+    // Select experiences for this day (avoid duplicates across days)
+    const usedExperienceIds = itinerary.map(item => item.experience_id);
+    const unusedExperiences = availableExperiences.filter(
+      exp => !usedExperienceIds.includes(exp.experience_id)
+    );
+    
+    // Shuffle and select experiences for this day
+    const shuffledExperiences = unusedExperiences.sort(() => Math.random() - 0.5);
+    const selectedExperiences = shuffledExperiences.slice(0, experiencesPerDay);
+    
+    // Schedule experiences with their actual time slots
+    selectedExperiences.forEach((experience, index) => {
+      // Select a random available time slot for this experience
+      const randomTimeSlot = experience.availableTimeSlots[
+        Math.floor(Math.random() * experience.availableTimeSlots.length)
+      ];
+      
+      itinerary.push({
+        experience_id: experience.experience_id,
+        day_number: day,
+        start_time: randomTimeSlot.start_time,
+        end_time: randomTimeSlot.end_time,
+        auto_note: `${experience.title} - ${dayOfWeek} at ${randomTimeSlot.start_time}`
+      });
+    });
+  }
+  
+  // Sort itinerary by day and time
+  itinerary.sort((a, b) => {
+    if (a.day_number !== b.day_number) {
+      return a.day_number - b.day_number;
+    }
+    return a.start_time.localeCompare(b.start_time);
+  });
+  
+  console.log('Generated itinerary with proper time slots:', itinerary.length);
+  return itinerary;
+};
+
+// Corrected filtering function that properly joins with availability tables
 const getFilteredExperiences = async ({
-  city, // Now optional
+  city,
   experience_types,
   travel_companion,
   explore_time,
@@ -242,28 +410,19 @@ const getFilteredExperiences = async ({
       budget
     });
 
-    // Calculate trip day names for availability filtering (FIXED VERSION)
+    // Calculate trip day names for availability filtering
     let tripDayNames = [];
     if (start_date && end_date) {
       try {
-        // Parse both dates consistently
         const [startYear, startMonth, startDay] = start_date.split('-');
         const [endYear, endMonth, endDay] = end_date.split('-');
         
         const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseInt(startDay));
         const endDate = new Date(parseInt(endYear), parseInt(endMonth) - 1, parseInt(endDay));
         
-        console.log('Date range:', { 
-          start_date, 
-          end_date, 
-          startDate: startDate.toDateString(), 
-          endDate: endDate.toDateString() 
-        });
-        
         const tripDaysOfWeek = [];
         const currentDate = new Date(startDate);
         
-        // Add safety check to prevent infinite loop
         let dayCount = 0;
         const maxDays = 365;
         
@@ -276,26 +435,17 @@ const getFilteredExperiences = async ({
         const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         tripDayNames = [...new Set(tripDaysOfWeek.map(dayNum => dayNames[dayNum]))];
         
-        console.log('Trip days of week (numbers):', tripDaysOfWeek);
         console.log('Trip day names:', tripDayNames);
         
       } catch (error) {
         console.error('Error calculating trip day names:', error);
-        tripDayNames = []; // Default to empty array on error
+        tripDayNames = [];
       }
     }
 
-    console.log('Trip day names:', tripDayNames);
-
-    // First, let's check if we have any experiences at all
-    const [allExperiences] = await db.query(`
-      SELECT COUNT(*) as total FROM experience WHERE status = 'active'
-    `);
-    console.log('Total active experiences in database:', allExperiences[0].total);
-
-    // Build the main query similar to getAllExperience
+    // Build the main query with proper joins to availability tables
     let query = `
-      SELECT 
+      SELECT DISTINCT
         e.experience_id,
         e.creator_id,
         e.destination_id,
@@ -314,70 +464,71 @@ const getFilteredExperiences = async ({
       JOIN destination d ON e.destination_id = d.destination_id
       LEFT JOIN experience_tags et ON e.experience_id = et.experience_id
       LEFT JOIN tags t ON et.tag_id = t.tag_id
-      LEFT JOIN experience_availability a ON e.experience_id = a.experience_id
-      LEFT JOIN availability_time_slots ts ON a.availability_id = ts.availability_id
       WHERE e.status = 'active'
     `;
 
     const queryParams = [];
-    const conditions = ['e.status = ?'];
-    queryParams.push('active');
 
     // Filter by city only if provided
     if (city && city.trim()) {
-      conditions.push('LOWER(d.city) LIKE ?');
+      query += ` AND LOWER(d.city) LIKE ?`;
       queryParams.push(`%${city.trim().toLowerCase()}%`);
     }
 
-    // Filter by travel companion - handle case sensitivity and exact matching
+    // Filter by travel companion
     if (travel_companion && travel_companion !== 'Any') {
-      conditions.push('LOWER(e.travel_companion) = LOWER(?)');
+      query += ` AND LOWER(e.travel_companion) = LOWER(?)`;
       queryParams.push(travel_companion.trim());
     }
 
-    // Add date filter if we have trip days
+    // Filter by availability days - ensure experience has availability on trip days
     if (tripDayNames.length > 0) {
-      conditions.push(`e.experience_id IN (
+      query += ` AND e.experience_id IN (
         SELECT DISTINCT ea.experience_id 
         FROM experience_availability ea 
         WHERE ea.day_of_week IN (${tripDayNames.map(() => '?').join(',')})
-      )`);
+      )`;
       queryParams.push(...tripDayNames);
     }
 
-    // Filter by explore time
+    // Filter by explore time using actual availability time slots
     if (explore_time && explore_time !== 'Both') {
+      let timeCondition = '';
       switch (explore_time.toLowerCase()) {
         case 'daytime':
-          conditions.push('HOUR(ts.start_time) < 20');
+          timeCondition = 'HOUR(ats.start_time) >= 6 AND HOUR(ats.start_time) < 18';
           break;
         case 'nighttime':
-          conditions.push('HOUR(ts.start_time) >= 16');
+          timeCondition = '(HOUR(ats.start_time) >= 18 OR HOUR(ats.start_time) < 6)';
           break;
+      }
+      
+      if (timeCondition) {
+        query += ` AND e.experience_id IN (
+          SELECT DISTINCT ea.experience_id 
+          FROM experience_availability ea
+          JOIN availability_time_slots ats ON ea.availability_id = ats.availability_id
+          WHERE ${timeCondition}
+        )`;
       }
     }
 
-    // Filter by budget - Updated to match getAllExperience logic
+    // Filter by budget
     if (budget && budget !== 'Any') {
       switch (budget.toLowerCase()) {
         case 'free':
-          conditions.push('e.price = 0');
+          query += ` AND e.price = 0`;
           break;
         case 'budget-friendly':
-          conditions.push('e.price <= 500');
+          query += ` AND e.price <= 500`;
           break;
         case 'mid-range':
-          conditions.push('e.price <= 2000');
+          query += ` AND e.price <= 2000`;
           break;
         case 'premium':
-          conditions.push('e.price > 2000');
+          query += ` AND e.price > 2000`;
           break;
       }
-    }
-
-    // Build the WHERE clause
-    if (conditions.length > 0) {
-      query += ` AND ${conditions.slice(1).join(' AND ')}`; // Skip the first condition since it's already in WHERE
     }
 
     // Group by to handle the aggregated fields
@@ -431,258 +582,51 @@ const getFilteredExperiences = async ({
   }
 };
 
-// Helper function to check experience availability - SIMPLIFIED
-const checkExperienceAvailability = async (experience_id, start_date, end_date, explore_time) => {
+// Alternative: Get experiences with all their time slots pre-loaded
+const getExperiencesWithTimeSlots = async (experienceIds, tripDayNames) => {
   try {
-    const [availability] = await db.query(`
-      SELECT day_of_week, start_time, end_time
-      FROM experience_availability
-      WHERE experience_id = ?
-    `, [experience_id]);
+    if (experienceIds.length === 0) return [];
 
-    // If no availability records, assume it's available (or set default policy)
-    if (availability.length === 0) {
-      console.log(`No availability records for experience ${experience_id}, defaulting to available`);
-      return true;
-    }
+    const [results] = await db.query(`
+      SELECT 
+        e.experience_id,
+        e.title,
+        ea.day_of_week,
+        ats.start_time,
+        ats.end_time,
+        ats.availability_id
+      FROM experience e
+      JOIN experience_availability ea ON e.experience_id = ea.experience_id
+      JOIN availability_time_slots ats ON ea.availability_id = ats.availability_id
+      WHERE e.experience_id IN (${experienceIds.map(() => '?').join(',')})
+      ${tripDayNames.length > 0 ? `AND ea.day_of_week IN (${tripDayNames.map(() => '?').join(',')})` : ''}
+      ORDER BY e.experience_id, ea.day_of_week, ats.start_time
+    `, [...experienceIds, ...tripDayNames]);
 
-    // Check if experience matches explore_time preference
-    const hasMatchingTimeSlots = availability.some(slot => {
-      const startHour = parseInt(slot.start_time.split(':')[0]);
-      const endHour = parseInt(slot.end_time.split(':')[0]);
-      
-      const isDaytime = startHour >= 6 && endHour <= 18;
-      const isNighttime = startHour >= 18 || endHour <= 6;
-      
-      switch (explore_time) {
-        case 'Daytime':
-          return isDaytime;
-        case 'Nighttime':
-          return isNighttime;
-        case 'Both':
-        default:
-          return true;
+    // Group by experience_id
+    const experienceTimeSlots = {};
+    results.forEach(row => {
+      if (!experienceTimeSlots[row.experience_id]) {
+        experienceTimeSlots[row.experience_id] = {
+          experience_id: row.experience_id,
+          title: row.title,
+          timeSlots: []
+        };
       }
+      experienceTimeSlots[row.experience_id].timeSlots.push({
+        day_of_week: row.day_of_week,
+        start_time: row.start_time,
+        end_time: row.end_time
+      });
     });
 
-    return hasMatchingTimeSlots;
+    return Object.values(experienceTimeSlots);
 
   } catch (error) {
-    console.error('Error checking availability:', error);
-    // Default to available on error to prevent blocking all experiences
-    return true;
+    console.error('Error getting experiences with time slots:', error);
+    return [];
   }
 };
-
-// Smart itinerary generation algorithm - FIXED VERSION
-// Updated Smart itinerary generation with activity intensity
-const smartItineraryGeneration = async ({
-  experiences,
-  totalDays,
-  experience_types,
-  explore_time,
-  travel_companion,
-  activity_intensity
-}) => {
-  const itineraryItems = [];
-  
-  // Define experiences per day based on activity intensity
-  const getExperiencesPerDay = (intensity, totalExperiences, totalDays) => {
-    let targetPerDay;
-    
-    switch (intensity.toLowerCase()) {
-      case 'low':
-        targetPerDay = Math.min(4, Math.random() < 0.5 ? 3 : 4); // 3-4 experiences
-        break;
-      case 'moderate':
-        targetPerDay = Math.min(6, Math.floor(Math.random() * 2) + 5); // 5-6 experiences
-        break;
-      case 'high':
-        targetPerDay = Math.max(6, Math.min(8, Math.floor(Math.random() * 3) + 6)); // 6-8 experiences
-        break;
-      default:
-        targetPerDay = Math.ceil(totalExperiences / totalDays); // fallback to even distribution
-    }
-    
-    // Ensure we don't exceed available experiences
-    const maxPossible = Math.ceil(totalExperiences / totalDays);
-    return Math.min(targetPerDay, maxPossible);
-  };
-
-  console.log(`Generating itinerary for ${totalDays} days with ${experiences.length} experiences`);
-  console.log(`Activity intensity: ${activity_intensity}`);
-
-  const baseExperiencesPerDay = getExperiencesPerDay(activity_intensity, experiences.length, totalDays);
-  console.log(`Target experiences per day: ${baseExperiencesPerDay}`);
-
-  // If we don't have experience types to categorize, distribute based on intensity
-  if (!experience_types || experience_types.length === 0) {
-    let experienceIndex = 0;
-    
-    for (let day = 1; day <= totalDays && experienceIndex < experiences.length; day++) {
-      const experiencesForDay = Math.min(
-        baseExperiencesPerDay, 
-        experiences.length - experienceIndex
-      );
-      
-      for (let i = 0; i < experiencesForDay && experienceIndex < experiences.length; i++) {
-        const exp = experiences[experienceIndex];
-        const timeSlot = generateTimeSlot(exp, explore_time, i);
-        
-        itineraryItems.push({
-          experience_id: exp.experience_id,
-          day_number: day,
-          start_time: timeSlot.start_time,
-          end_time: timeSlot.end_time,
-          auto_note: `Auto-scheduled: ${exp.title || 'Experience'}`
-        });
-        
-        experienceIndex++;
-      }
-    }
-    
-    return itineraryItems;
-  }
-
-  // Categorize experiences by type
-  const categorizedExperiences = {};
-  experience_types.forEach(type => {
-    categorizedExperiences[type] = experiences.filter(exp => 
-      exp.tag_names && exp.tag_names.some(tag => 
-        tag.toLowerCase().includes(type.toLowerCase())
-      )
-    );
-  });
-
-  // Add uncategorized experiences
-  const categorizedIds = new Set();
-  Object.values(categorizedExperiences).forEach(categoryExps => {
-    categoryExps.forEach(exp => categorizedIds.add(exp.experience_id));
-  });
-  
-  const uncategorizedExperiences = experiences.filter(exp => 
-    !categorizedIds.has(exp.experience_id)
-  );
-  
-  if (uncategorizedExperiences.length > 0) {
-    categorizedExperiences['Other'] = uncategorizedExperiences;
-  }
-
-  console.log('Categorized experiences:', Object.keys(categorizedExperiences).map(key => 
-    `${key}: ${categorizedExperiences[key].length}`
-  ));
-
-  // Distribute experiences across days based on intensity
-  const availableExperiences = [...experiences];
-  let usedExperiences = new Set();
-  
-  for (let day = 1; day <= totalDays; day++) {
-    // Calculate experiences for this specific day based on intensity
-    let experiencesForThisDay;
-    
-    switch (activity_intensity.toLowerCase()) {
-      case 'low':
-        experiencesForThisDay = Math.min(
-          Math.floor(Math.random() * 2) + 3, // 3-4 random
-          Math.ceil((experiences.length - usedExperiences.size) / (totalDays - day + 1))
-        );
-        break;
-      case 'moderate':
-        experiencesForThisDay = Math.min(
-          Math.floor(Math.random() * 2) + 5, // 5-6 random
-          Math.ceil((experiences.length - usedExperiences.size) / (totalDays - day + 1))
-        );
-        break;
-      case 'high':
-        experiencesForThisDay = Math.min(
-          Math.floor(Math.random() * 3) + 6, // 6-8 random
-          Math.ceil((experiences.length - usedExperiences.size) / (totalDays - day + 1))
-        );
-        break;
-      default:
-        experiencesForThisDay = baseExperiencesPerDay;
-    }
-    
-    console.log(`Day ${day}: Planning ${experiencesForThisDay} experiences`);
-    
-    const dayExperiences = [];
-    const categoryKeys = Object.keys(categorizedExperiences);
-    let selectedCount = 0;
-    let categoryIndex = (day - 1) % categoryKeys.length;
-
-    // Select experiences for this day
-    while (selectedCount < experiencesForThisDay && usedExperiences.size < experiences.length) {
-      let experienceSelected = false;
-
-      // Try each category in rotation for variety
-      for (let i = 0; i < categoryKeys.length && selectedCount < experiencesForThisDay; i++) {
-        const currentCategoryIndex = (categoryIndex + i) % categoryKeys.length;
-        const category = categoryKeys[currentCategoryIndex];
-        
-        const availableFromCategory = categorizedExperiences[category].filter(exp => 
-          !usedExperiences.has(exp.experience_id)
-        );
-
-        if (availableFromCategory.length > 0) {
-          const selectedExp = availableFromCategory[0];
-          const timeSlot = generateTimeSlot(selectedExp, explore_time, selectedCount);
-          
-          dayExperiences.push({
-            experience_id: selectedExp.experience_id,
-            day_number: day,
-            start_time: timeSlot.start_time,
-            end_time: timeSlot.end_time,
-            auto_note: `Auto-scheduled: ${selectedExp.title || 'Experience'} (${category})`
-          });
-
-          usedExperiences.add(selectedExp.experience_id);
-          selectedCount++;
-          experienceSelected = true;
-        }
-      }
-
-      // Fallback: select any remaining experience
-      if (!experienceSelected) {
-        const remainingExps = availableExperiences.filter(exp => 
-          !usedExperiences.has(exp.experience_id)
-        );
-        
-        if (remainingExps.length > 0) {
-          const selectedExp = remainingExps[0];
-          const timeSlot = generateTimeSlot(selectedExp, explore_time, selectedCount);
-          
-          dayExperiences.push({
-            experience_id: selectedExp.experience_id,
-            day_number: day,
-            start_time: timeSlot.start_time,
-            end_time: timeSlot.end_time,
-            auto_note: `Auto-scheduled: ${selectedExp.title || 'Experience'}`
-          });
-
-          usedExperiences.add(selectedExp.experience_id);
-          selectedCount++;
-        } else {
-          break; // No more experiences available
-        }
-      }
-    }
-
-    itineraryItems.push(...dayExperiences);
-    console.log(`Day ${day}: Added ${dayExperiences.length} experiences`);
-    
-    // Early exit if no more experiences available
-    if (usedExperiences.size >= experiences.length) {
-      console.log(`All ${experiences.length} experiences have been allocated`);
-      break;
-    }
-  }
-
-  console.log(`Generated ${itineraryItems.length} itinerary items total`);
-  console.log(`Used ${usedExperiences.size} out of ${experiences.length} available experiences`);
-  
-  return itineraryItems;
-};
-
 
 
 // Generate appropriate time slots for experiences - UNCHANGED
