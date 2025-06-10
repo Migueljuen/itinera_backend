@@ -573,336 +573,6 @@ const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseI
 };
 
 
-// const getAllExperience = async (req, res) => {
-//   try {
-//     const { 
-//       location, 
-//       start_date, 
-//       end_date, 
-//       tags, // Add this - expect comma-separated string or array
-//       budget, // Add this
-//       explore_time, // Add this if needed
-//       travel_companion 
-//     } = req.query;
-
-//     // Base query for experiences
-// let query = `
-//       SELECT 
-//         e.experience_id AS id,
-//         e.title,
-//         e.description,
-//         e.price,
-//         e.unit,
-//         d.name AS destination_name,
-//         d.city AS location,
-//         e.travel_companion, 
-//         GROUP_CONCAT(DISTINCT t.name) AS tags
-//       FROM experience e
-//       JOIN destination d ON e.destination_id = d.destination_id
-//       LEFT JOIN experience_tags et ON e.experience_id = et.experience_id
-//       LEFT JOIN tags t ON et.tag_id = t.tag_id
-//     `;
-
-//     const params = [];
-//     const conditions = [];
-//     // Location filtering
-//     if (location) {
-//       conditions.push(`d.city LIKE ?`);
-//       params.push(`%${location.trim().toLowerCase()}%`);
-//     }
-
-
-// if (travel_companion) {
-//   conditions.push(`LOWER(e.travel_companion) = LOWER(?)`);
-// params.push(travel_companion.trim());
-
-// }
-
-// // ExploreTime filtering
-// if (exploreTime) {
-//   let timeCondition = '';
-//   switch (exploreTime.toLowerCase()) {
-//     case 'morning':
-//       timeCondition = 'HOUR(ts.start_time) < 12';
-//       break;
-//     case 'afternoon':
-//       timeCondition = 'HOUR(ts.start_time) >= 12 AND HOUR(ts.start_time) < 18';
-//       break;
-//     case 'evening':
-//       timeCondition = 'HOUR(ts.start_time) >= 18';
-//       break;
-//     case 'both':
-//     default:
-//       timeCondition = ''; // No filter
-//       break;
-//   }
-
-//   if (timeCondition) {
-//     conditions.push(timeCondition);
-//   }
-// }
-
-//     // Budget filtering
-//     if (budget) {
-//       let budgetCondition = '';
-//       switch (budget.toLowerCase()) {
-//         case 'free':
-//           budgetCondition = 'e.price = 0';
-//           break;
-//         case 'budget-friendly':
-//           budgetCondition = 'e.price <= 500';
-//           break;
-//         case 'mid-range':
-//           budgetCondition = 'e.price > 500 AND e.price <= 2000';
-//           break;
-//         case 'premium':
-//           budgetCondition = 'e.price > 2000';
-//           break;
-//       }
-//       if (budgetCondition) {
-//         conditions.push(budgetCondition);
-//       }
-//     }
-
-//     // Tag filtering - experiences must have at least one of the specified tags
-//     if (tags) {
-//       const tagArray = Array.isArray(tags) ? tags : tags.split(',');
-//       const cleanedTags = tagArray.map(tag => tag.trim());
-      
-//       if (cleanedTags.length > 0) {
-//         conditions.push(`e.experience_id IN (
-//           SELECT DISTINCT et2.experience_id 
-//           FROM experience_tags et2 
-//           JOIN tags t2 ON et2.tag_id = t2.tag_id 
-//           WHERE t2.name IN (${cleanedTags.map(() => '?').join(',')})
-//         )`);
-//         params.push(...cleanedTags);
-//       }
-//     }
-
-//     // Apply WHERE clause
-//     if (conditions.length > 0) {
-//       query += ` WHERE ${conditions.join(' AND ')}`;
-//     }
-
-//     // Date range filtering - only add if both dates are provided
-//     if (start_date && end_date) {
-//       // Convert dates to Date objects
-//       const startDate = new Date(start_date);
-//       const endDate = new Date(end_date);
-      
-//       // Get all days of the week during the trip (0-6, where 0 = Sunday)
-//       const tripDaysOfWeek = [];
-//       for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-//         tripDaysOfWeek.push(d.getDay());
-//       }
-      
-//       // Convert day numbers to day names used in your database
-//       const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-//       const tripDayNames = tripDaysOfWeek.map(dayNum => dayNames[dayNum]);
-      
-//       // Add the date range filter - experiences must have availability on at least one day of the trip
-//       const dateCondition = ` 
-//         ${conditions.length > 0 ? 'AND' : 'WHERE'} e.experience_id IN (
-//           SELECT DISTINCT a.experience_id 
-//           FROM experience_availability a
-//           JOIN availability_time_slots ts ON a.availability_id = ts.availability_id
-//           WHERE a.day_of_week IN (${tripDayNames.map(() => '?').join(',')})
-//           AND ts.start_time IS NOT NULL
-//         )
-//       `;
-      
-//       query += dateCondition;
-//       params.push(...tripDayNames);
-//     }
-
-//     // Finalize with GROUP BY
-//     query += ` GROUP BY e.experience_id `;
-
-//     // Execute the query
-//     const [experiences] = await db.query(query, params);
-
-//     // ... rest of your code for images and availability remains the same ...
-
-//     // Fetch images
-//     const [images] = await db.query(`
-//       SELECT 
-//         experience_id,
-//         image_url
-//       FROM experience_images
-//     `);
-
-//     // Fetch availability data for each experience
-//     let availabilityQuery = `
-//       SELECT 
-//         a.experience_id,
-//         a.availability_id,
-//         a.day_of_week,
-//         ts.slot_id,
-//         ts.start_time,
-//         ts.end_time
-//       FROM experience_availability a
-//       JOIN availability_time_slots ts ON a.availability_id = ts.availability_id
-//       WHERE a.experience_id IN (?)
-//     `;
-
-//     // Get all experience IDs
-//     const experienceIds = experiences.map(exp => exp.id);
-    
-//     // Only fetch availability if we have experiences
-//     let availabilityResults = [];
-//     if (experienceIds.length > 0) {
-//       [availabilityResults] = await db.query(availabilityQuery, [experienceIds]);
-//     }
-
-//     // Map images
-//     const imageMap = {};
-//     images.forEach(img => {
-//       if (!imageMap[img.experience_id]) {
-//         imageMap[img.experience_id] = [];
-//       }
-
-//       let webPath = img.image_url;
-
-//       if (webPath.includes(':\\') || webPath.includes('\\')) {
-//         const filename = webPath.split('\\').pop();
-//         webPath = `uploads/experience/${filename}`;
-//       }
-
-//       imageMap[img.experience_id].push(webPath);
-//     });
-
-//     // Map availability data
-//     const availabilityMap = {};
-//     availabilityResults.forEach(avail => {
-//       if (!availabilityMap[avail.experience_id]) {
-//         availabilityMap[avail.experience_id] = [];
-//       }
-      
-//       // Find existing day entry or create new one
-//       let dayAvailability = availabilityMap[avail.experience_id].find(
-//         day => day.availability_id === avail.availability_id
-//       );
-      
-//       if (!dayAvailability) {
-//         dayAvailability = {
-//           availability_id: avail.availability_id,
-//           experience_id: avail.experience_id,
-//           day_of_week: avail.day_of_week,
-//           time_slots: []
-//         };
-//         availabilityMap[avail.experience_id].push(dayAvailability);
-//       }
-      
-//       // Add time slot if it exists
-//       if (avail.slot_id) {
-//         dayAvailability.time_slots.push({
-//           slot_id: avail.slot_id,
-//           availability_id: avail.availability_id,
-//           start_time: avail.start_time,
-//           end_time: avail.end_time
-//         });
-//       }
-//     });
-
-//     // Attach tags, images, and availability to each experience
-//     experiences.forEach(exp => {
-//       exp.tags = exp.tags ? exp.tags.split(',') : [];
-//       exp.images = imageMap[exp.id] || [];
-//       exp.availability = availabilityMap[exp.id] || [];
-      
-//       // Add budget category based on price (this is now redundant since we filter by budget)
-//       if (exp.price === 0) {
-//         exp.budget_category = 'Free';
-//       } else if (exp.price <= 500) {
-//         exp.budget_category = 'Budget-friendly';
-//       } else if (exp.price <= 2000) {
-//         exp.budget_category = 'Mid-range';
-//       } else {
-//         exp.budget_category = 'Premium';
-//       }
-//     });
-//     // For debugging
-//     console.log('Query:', query);
-//     console.log('Params:', params);
-//     console.log('Found experiences:', experiences.length);
-
-//     res.status(200).json(experiences);
-
-//    } catch (error) {
-//     console.error('Error fetching experiences:', error);
-//     res.status(500).json({ message: 'Failed to fetch experiences' });
-//   }
-// };
-
-
-// const getAllExperience = async (req, res) => {
-//   try {
-//     // 1. Fetch all experiences with destination info and tags
-//     const [experiences] = await db.query(`
-//       SELECT 
-//         e.experience_id AS id,
-//         e.title,
-//         e.description,
-//         e.price,
-//         e.unit,
-//         d.name AS destination_name,
-//         d.city AS location,
-//         GROUP_CONCAT(t.name) AS tags
-//       FROM experience e
-//       JOIN destination d ON e.destination_id = d.destination_id
-//       LEFT JOIN experience_tags et ON e.experience_id = et.experience_id
-//       LEFT JOIN tags t ON et.tag_id = t.tag_id
-//       GROUP BY e.experience_id
-//     `);
-
-//     // 2. Fetch all images
-//     const [images] = await db.query(`
-//       SELECT 
-//         experience_id,
-//         image_url
-//       FROM experience_images
-//     `);
-
-//     // 3. Map images by experience_id with corrected paths
-//     const imageMap = {};
-//     images.forEach(img => {
-//       if (!imageMap[img.experience_id]) {
-//         imageMap[img.experience_id] = [];
-//       }
-      
-//       // Convert absolute Windows file paths to web-accessible paths
-//       let webPath = img.image_url;
-      
-//       // If the path contains Windows drive indicators or backslashes
-//       if (webPath.includes(':\\') || webPath.includes('\\')){
-//         // Extract just the filename from the path
-//         const filename = webPath.split('\\').pop();
-//         webPath = `uploads/experiences/${filename}`;
-//       }
-      
-//       imageMap[img.experience_id].push(webPath);
-//     });
-
-//     // 4. Attach tags and images to each experience
-//     experiences.forEach(exp => {
-//       exp.tags = exp.tags ? exp.tags.split(',') : [];
-//       exp.images = imageMap[exp.id] || [];
-      
-//       // For debugging
-//       if (exp.images.length > 0) {
-//         console.log(`Experience ${exp.id} has images:`, exp.images);
-//       }
-//     });
-
-//     // 5. Return the final result
-//     res.status(200).json(experiences);
-
-//   } catch (error) {
-//     console.error('Error fetching experiences:', error);
-//     res.status(500).json({ message: 'Failed to fetch experiences' });
-//   }
-// };
 const getActiveExperience = async (req, res) => {
   try {
     // 1. Fetch active experiences with destination info and tags
@@ -1014,80 +684,6 @@ const getExperienceById = async (req, res) => {
 }
 
 
-// const getExperienceById = async (req, res) => {
-//   const { id } = req.params;
-
-//   try {
-//     // Fetch experience and destination
-//     const [rows] = await db.query(
-//       `SELECT e.*, d.name AS destination_name
-//        FROM experience e
-//        JOIN destination d ON e.destination_id = d.destination_id
-//        WHERE e.experience_id = ?`,
-//       [id]
-//     );
-
-//     if (rows.length === 0) {
-//       return res.status(404).json({ message: 'Experience not found' });
-//     }
-
-//     const experience = rows[0];
-
-//     // Fetch tags associated with the experience
-//     const [tagRows] = await db.query(
-//       `SELECT t.name FROM tags t
-//        JOIN experience_tags et ON t.tag_id = et.tag_id
-//        WHERE et.experience_id = ?`,
-//       [id]
-//     );
-//     experience.tags = tagRows.map(tag => tag.name);
-
-//     // Fetch images associated with the experience
-//     const [imageRows] = await db.query(
-//       `SELECT image_url FROM experience_images WHERE experience_id = ?`,
-//       [id]
-//     );
-    
-//     experience.images = imageRows.map(img => {
-//       const filename = path.basename(img.image_url);
-//       return `/uploads/experiences/${filename}`;
-//     });
-
-//     // Fetch availability days for this experience
-//     const [availabilityRows] = await db.query(
-//       `SELECT availability_id, experience_id, day_of_week
-//        FROM availability
-//        WHERE experience_id = ?`,
-//       [id]
-//     );
-
-//     // For each availability day, fetch the time slots
-//     const availabilityWithSlots = await Promise.all(
-//       availabilityRows.map(async (avail) => {
-//         const [timeSlots] = await db.query(
-//           `SELECT slot_id, availability_id, start_time, end_time
-//            FROM availability_time_slots
-//            WHERE availability_id = ?`,
-//           [avail.availability_id]
-//         );
-
-//         return {
-//           ...avail,
-//           time_slots: timeSlots,
-//         };
-//       })
-//     );
-
-//     experience.availability = availabilityWithSlots;
-
-//     res.json(experience);
-
-//   } catch (err) {
-//     console.error('Error fetching experience:', err);
-//     res.status(500).json({ error: 'Server error', details: err.message });
-//   }
-// };
-
 const getExperienceByUserID = async (req, res) => {
   const { user_id } = req.params;
 
@@ -1105,29 +701,54 @@ const getExperienceByUserID = async (req, res) => {
       return res.status(404).json({ message: 'No experiences found for this user' });
     }
 
-    // For each experience, fetch tags and images
-    for (const experience of experiences) {
-      const experienceId = experience.experience_id;
+    const experienceIds = experiences.map(exp => exp.experience_id);
 
-      // Fetch tags
-      const [tagRows] = await db.query(
-        `SELECT t.name FROM tags t
-         JOIN experience_tags et ON t.tag_id = et.tag_id
-         WHERE et.experience_id = ?`,
-        [experienceId]
-      );
-      experience.tags = tagRows.map(tag => tag.name);
+    // Fetch all tags for these experiences
+    const [tagRows] = await db.query(
+      `SELECT et.experience_id, t.name
+       FROM experience_tags et
+       JOIN tags t ON et.tag_id = t.tag_id
+       WHERE et.experience_id IN (?)`,
+      [experienceIds]
+    );
 
-      // Fetch images
-      const [imageRows] = await db.query(
-        `SELECT image_url FROM experience_images WHERE experience_id = ?`,
-        [experienceId]
-      );
-      experience.images = imageRows.map(img => {
-        const filename = path.basename(img.image_url);
-        return `/uploads/experiences/${filename}`;
-      });
-    }
+    const tagMap = {};
+    tagRows.forEach(row => {
+      if (!tagMap[row.experience_id]) {
+        tagMap[row.experience_id] = [];
+      }
+      tagMap[row.experience_id].push(row.name);
+    });
+
+    // Fetch all images for these experiences
+    const [imageRows] = await db.query(
+      `SELECT experience_id, image_url FROM experience_images WHERE experience_id IN (?)`,
+      [experienceIds]
+    );
+
+    const imageMap = {};
+    imageRows.forEach(img => {
+      if (!imageMap[img.experience_id]) {
+        imageMap[img.experience_id] = [];
+      }
+
+      let webPath = img.image_url;
+      if (webPath.includes(':\\') || webPath.includes('\\')) {
+        const filename = webPath.split('\\').pop();
+        webPath = `/uploads/experiences/${filename}`;
+      } else {
+        const filename = path.basename(webPath);
+        webPath = `/uploads/experiences/${filename}`;
+      }
+
+      imageMap[img.experience_id].push(webPath);
+    });
+
+    // Attach tags and images to experiences
+    experiences.forEach(exp => {
+      exp.tags = tagMap[exp.experience_id] || [];
+      exp.images = imageMap[exp.experience_id] || [];
+    });
 
     res.json(experiences);
   } catch (err) {
