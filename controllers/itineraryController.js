@@ -49,7 +49,17 @@ const createItinerary = async (req, res) => {
 
     // Validate accommodation data if provided
     if (accommodation) {
-      const { name, address, latitude, longitude, check_in, check_out, booking_link } = accommodation;
+      const { 
+        name, 
+        address, 
+        latitude, 
+        longitude, 
+        check_in, 
+        check_out, 
+        check_in_time,
+        check_out_time,
+        booking_link 
+      } = accommodation;
       
       // Validate required accommodation fields
       if (!name || !address) {
@@ -66,6 +76,19 @@ const createItinerary = async (req, res) => {
           await connection.rollback();
           return res.status(400).json({ message: 'Check-in date cannot be after check-out date' });
         }
+      }
+
+      // Validate check-in and check-out times if provided (format: HH:MM or HH:MM:SS)
+      const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/;
+      
+      if (check_in_time && !timeRegex.test(check_in_time)) {
+        await connection.rollback();
+        return res.status(400).json({ message: 'Check-in time must be in HH:MM or HH:MM:SS format' });
+      }
+      
+      if (check_out_time && !timeRegex.test(check_out_time)) {
+        await connection.rollback();
+        return res.status(400).json({ message: 'Check-out time must be in HH:MM or HH:MM:SS format' });
       }
 
       // Validate latitude and longitude if provided
@@ -116,12 +139,22 @@ const createItinerary = async (req, res) => {
     // Insert accommodation if provided
     let accommodationData = null;
     if (accommodation) {
-      const { name, address, latitude, longitude, check_in, check_out, booking_link } = accommodation;
+      const { 
+        name, 
+        address, 
+        latitude, 
+        longitude, 
+        check_in, 
+        check_out,
+        check_in_time,
+        check_out_time,
+        booking_link 
+      } = accommodation;
       
       const [accommodationResult] = await connection.query(
         `INSERT INTO accommodation 
-         (itinerary_id, name, address, latitude, longitude, check_in, check_out, booking_link)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         (itinerary_id, name, address, latitude, longitude, check_in, check_out, check_in_time, check_out_time, booking_link)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           itinerary_id,
           name,
@@ -130,6 +163,8 @@ const createItinerary = async (req, res) => {
           longitude || null,
           check_in || null,
           check_out || null,
+          check_in_time || null,
+          check_out_time || null,
           booking_link || null
         ]
       );
