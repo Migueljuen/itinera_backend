@@ -3,18 +3,31 @@ const db = require('../config/db.js');
 const path = require('path');
 
 const createItinerary = async (req, res) => {
-  const { traveler_id, start_date, end_date, title, notes, items } = req.body;
+  const { 
+    traveler_id, 
+    start_date, 
+    end_date, 
+    title, 
+    notes, 
+    items,
+    accommodation  // Optional accommodation data
+  } = req.body;
 
   // Validate required fields
   if (!traveler_id || !start_date || !end_date || !title || !items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ message: 'Traveler ID, start date, end date, title, and items are required' });
   }
 
+  // Begin transaction for atomicity
+  const connection = await db.getConnection();
+  await connection.beginTransaction();
+
   try {
     const startDate = dayjs(start_date);
     const endDate = dayjs(end_date);
 
     if (startDate.isAfter(endDate)) {
+      await connection.rollback();
       return res.status(400).json({ message: 'Start date cannot be after end date' });
     }
 
@@ -24,16 +37,51 @@ const createItinerary = async (req, res) => {
     for (const item of items) {
       const { experience_id, day_number, start_time, end_time } = item;
       if (!experience_id || !day_number || !start_time || !end_time) {
+        await connection.rollback();
         return res.status(400).json({ message: 'Each item must include experience_id, day_number, start_time, and end_time' });
       }
 
       if (day_number < 1 || day_number > totalDays) {
+        await connection.rollback();
         return res.status(400).json({ message: `Invalid day_number: must be between 1 and ${totalDays}` });
       }
     }
 
+    // Validate accommodation data if provided
+    if (accommodation) {
+      const { name, address, latitude, longitude, check_in, check_out, booking_link } = accommodation;
+      
+      // Validate required accommodation fields
+      if (!name || !address) {
+        await connection.rollback();
+        return res.status(400).json({ message: 'Accommodation name and address are required' });
+      }
+
+      // Validate check-in and check-out dates if provided
+      if (check_in && check_out) {
+        const checkInDate = dayjs(check_in);
+        const checkOutDate = dayjs(check_out);
+        
+        if (checkInDate.isAfter(checkOutDate)) {
+          await connection.rollback();
+          return res.status(400).json({ message: 'Check-in date cannot be after check-out date' });
+        }
+      }
+
+      // Validate latitude and longitude if provided
+      if (latitude !== undefined && (latitude < -90 || latitude > 90)) {
+        await connection.rollback();
+        return res.status(400).json({ message: 'Latitude must be between -90 and 90' });
+      }
+      
+      if (longitude !== undefined && (longitude < -180 || longitude > 180)) {
+        await connection.rollback();
+        return res.status(400).json({ message: 'Longitude must be between -180 and 180' });
+      }
+    }
+
     // Insert into itinerary table
-    const [result] = await db.query(
+    const [result] = await connection.query(
       `INSERT INTO itinerary (traveler_id, start_date, end_date, title, notes, created_at, status)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [traveler_id, start_date, end_date, title, notes || '', dayjs().format('YYYY-MM-DD'), 'upcoming']
@@ -42,6 +90,7 @@ const createItinerary = async (req, res) => {
     const itinerary_id = result.insertId;
 
     if (!itinerary_id) {
+      await connection.rollback();
       throw new Error('Failed to create itinerary');
     }
 
@@ -57,16 +106,63 @@ const createItinerary = async (req, res) => {
       dayjs().format('YYYY-MM-DD HH:mm:ss')
     ]);
 
-    await db.query(
+    await connection.query(
       `INSERT INTO itinerary_items 
         (itinerary_id, experience_id, day_number, start_time, end_time, custom_note, created_at, updated_at)
        VALUES ?`,
       [itemValues]
     );
 
-    res.status(201).json({ message: 'Itinerary created successfully', itinerary_id });
+    // Insert accommodation if provided
+    let accommodationData = null;
+    if (accommodation) {
+      const { name, address, latitude, longitude, check_in, check_out, booking_link } = accommodation;
+      
+      const [accommodationResult] = await connection.query(
+        `INSERT INTO accommodation 
+         (itinerary_id, name, address, latitude, longitude, check_in, check_out, booking_link)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          itinerary_id,
+          name,
+          address,
+          latitude || null,
+          longitude || null,
+          check_in || null,
+          check_out || null,
+          booking_link || null
+        ]
+      );
+
+      // Fetch the created accommodation data for response
+      const [createdAccommodation] = await connection.query(
+        'SELECT * FROM accommodation WHERE accommodation_id = ?',
+        [accommodationResult.insertId]
+      );
+      
+      accommodationData = createdAccommodation[0];
+    }
+
+    // Commit the transaction
+    await connection.commit();
+    connection.release();
+
+    // Prepare response
+    const response = {
+      message: 'Itinerary created successfully',
+      itinerary_id
+    };
+
+    // Add accommodation data to response if it was created
+    if (accommodationData) {
+      response.accommodation = accommodationData;
+    }
+
+    res.status(201).json(response);
 
   } catch (err) {
+    await connection.rollback();
+    connection.release();
     console.error('Error creating itinerary:', err);
     res.status(500).json({ error: 'Server error', details: err.message });
   }
