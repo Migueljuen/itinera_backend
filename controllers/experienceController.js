@@ -315,22 +315,63 @@ const getAllExperience = async (req, res) => {
       explore_time,
       travel_companion,
       start_time,
-      end_time
+      end_time,
+      itinerary_id, // Add this to get accommodation info
+      accommodation_id // Or pass this directly
     } = req.query;
 
     console.log('=== API REQUEST DEBUG ===');
     console.log('Query params:', req.query);
 
+    // Get accommodation details if filtering for itinerary
+    let accommodationDetails = null;
+    if (itinerary_id || accommodation_id) {
+      try {
+        let accommodationQuery;
+        let accommodationParams;
+        
+        if (itinerary_id) {
+          accommodationQuery = `
+            SELECT a.check_in_time, a.check_out_time, i.start_date, i.end_date
+            FROM itinerary i
+            LEFT JOIN accommodation a ON i.accommodation_id = a.id
+            WHERE i.itinerary_id = ?
+          `;
+          accommodationParams = [itinerary_id];
+        } else {
+          accommodationQuery = `
+            SELECT check_in_time, check_out_time
+            FROM accommodation
+            WHERE id = ?
+          `;
+          accommodationParams = [accommodation_id];
+        }
+        
+        const [accommodationResult] = await db.query(accommodationQuery, accommodationParams);
+        if (accommodationResult.length > 0) {
+          accommodationDetails = accommodationResult[0];
+          console.log('=== ACCOMMODATION DEBUG ===');
+          console.log('Accommodation details:', accommodationDetails);
+        }
+      } catch (accommodationError) {
+        console.log('Error fetching accommodation:', accommodationError);
+      }
+    }
+
     let tripDayNames = [];
+    let tripDates = []; // Store actual dates for accommodation filtering
+    
     if (start_date && end_date) {
-     const [startYear, startMonth, startDay] = start_date.split('-');
-const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseInt(startDay));
+      const [startYear, startMonth, startDay] = start_date.split('-');
+      const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseInt(startDay));
       const endDate = new Date(end_date);
       const tripDaysOfWeek = [];
 
       const currentDate = new Date(startDate);
       while (currentDate <= endDate) {
         tripDaysOfWeek.push(currentDate.getDay());
+        // Store actual dates for accommodation filtering
+        tripDates.push(new Date(currentDate));
         currentDate.setDate(currentDate.getDate() + 1);
       }
 
@@ -342,6 +383,7 @@ const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseI
     console.log('Start date:', start_date);
     console.log('End date:', end_date);
     console.log('Trip day names:', tripDayNames);
+    console.log('Trip dates:', tripDates);
 
     let query = `
       SELECT 
@@ -372,18 +414,19 @@ const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseI
       LEFT JOIN availability_time_slots ts ON a.availability_id = ts.availability_id
     `;
 
-    // Now add other conditions and their parameters
+    // Location filter
     if (location) {
       conditions.push(`LOWER(d.city) LIKE ?`);
       params.push(`%${location.trim().toLowerCase()}%`);
     }
 
+    // Travel companion filter
     if (travel_companion) {
       conditions.push(`LOWER(e.travel_companion) = LOWER(?)`);
       params.push(travel_companion.trim());
     }
 
-    // Add date filter as a WHERE condition instead of JOIN condition
+    // Date filter with accommodation consideration
     if (hasDateFilter) {
       conditions.push(`e.experience_id IN (
         SELECT DISTINCT ea.experience_id 
@@ -391,38 +434,61 @@ const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseI
         WHERE ea.day_of_week IN (${tripDayNames.map(() => '?').join(',')})
       )`);
       params.push(...tripDayNames);
-      
-      // DEBUG: Let's see which experiences match the date filter
-      console.log('=== DATE FILTER DEBUG ===');
-      const debugQuery = `
-        SELECT DISTINCT ea.experience_id, ea.day_of_week
-        FROM experience_availability ea 
-        WHERE ea.day_of_week IN (${tripDayNames.map(() => '?').join(',')})
-        ORDER BY ea.experience_id, ea.day_of_week
-      `;
-      try {
-        const [debugResults] = await db.query(debugQuery, tripDayNames);
-        console.log('Experiences matching date filter:', debugResults);
-        
-        // Specifically check experience ID 4
-        const exp4Results = debugResults.filter(r => r.experience_id === 4);
-        console.log('Experience ID 4 availability:', exp4Results);
-      } catch (debugError) {
-        console.log('Debug query error:', debugError);
-      }
     }
 
+    // Time filters (including accommodation constraints)
+    const timeConditions = [];
+    
+    // Original explore_time filter
     if (explore_time) {
       switch (explore_time.toLowerCase()) {
         case 'daytime':
-          conditions.push('HOUR(ts.start_time) < 18');
+          timeConditions.push('HOUR(ts.start_time) < 18');
           break;
         case 'nighttime':
-          conditions.push('HOUR(ts.start_time) >= 16');
+          timeConditions.push('HOUR(ts.start_time) >= 16');
           break;
       }
     }
 
+    // Accommodation time constraints
+    if (accommodationDetails && accommodationDetails.check_in_time && accommodationDetails.check_out_time) {
+      // For check-in day: experiences must start after check-in time
+      // For check-out day: experiences must end before check-out time
+      // For days in between: no time restrictions
+      
+      // This is a simplified version - you might need more complex logic
+      // depending on how you want to handle multi-day itineraries
+      if (start_date && end_date) {
+        const checkInTime = accommodationDetails.check_in_time;
+        const checkOutTime = accommodationDetails.check_out_time;
+        
+        // Add accommodation time filtering logic
+        // Note: This assumes single-day experiences. For multi-day trips,
+        // you'd need to check each day individually
+        timeConditions.push(`
+          (
+            (DATE(?) = ? AND ts.start_time >= ?) OR  -- Check-in day
+            (DATE(?) = ? AND ts.end_time <= ?) OR    -- Check-out day  
+            (DATE(?) > ? AND DATE(?) < ?)            -- Days in between
+          )
+        `);
+        
+        // Add parameters for accommodation time filtering
+        params.push(
+          start_date, start_date, checkInTime,  // Check-in day
+          end_date, end_date, checkOutTime,     // Check-out day
+          start_date, start_date, end_date      // Days in between
+        );
+      }
+    }
+
+    // Combine time conditions
+    if (timeConditions.length > 0) {
+      conditions.push(`(${timeConditions.join(' AND ')})`);
+    }
+
+    // Budget filter
     if (budget) {
       switch (budget.toLowerCase()) {
         case 'free':
@@ -440,6 +506,7 @@ const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseI
       }
     }
 
+    // Tags filter
     if (tags) {
       const tagArray = Array.isArray(tags) ? tags : tags.split(',');
       const cleanedTags = tagArray.map(tag => tag.trim());
@@ -465,14 +532,16 @@ const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseI
 
     const [experiences] = await db.query(query, params);
 
+    // Get images
     const [images] = await db.query(`
       SELECT experience_id, image_url
       FROM experience_images
     `);
 
+    // Get availability with accommodation filtering
     const experienceIds = experiences.map(exp => exp.id);
-
     let availabilityResults = [];
+    
     if (experienceIds.length > 0) {
       let availabilityQuery = `
         SELECT 
@@ -496,12 +565,26 @@ const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseI
         availabilityParams.push(...tripDayNames);
       }
       
+      // Apply accommodation time filtering to availability
+      if (accommodationDetails && accommodationDetails.check_in_time && accommodationDetails.check_out_time) {
+        // Filter time slots based on accommodation constraints
+        // This is a simplified version - you might need more complex date-specific logic
+        availabilityQuery += `
+          AND (
+            ts.start_time >= ? OR  -- After check-in time
+            ts.end_time <= ?       -- Before check-out time
+          )
+        `;
+        availabilityParams.push(accommodationDetails.check_in_time, accommodationDetails.check_out_time);
+      }
+      
       availabilityQuery += ` ORDER BY a.experience_id, a.day_of_week, ts.start_time`;
       
       const [results] = await db.query(availabilityQuery, availabilityParams);
       availabilityResults = results;
     }
 
+    // Process images
     const imageMap = {};
     images.forEach(img => {
       if (!imageMap[img.experience_id]) {
@@ -515,6 +598,7 @@ const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseI
       imageMap[img.experience_id].push(webPath);
     });
 
+    // Process availability
     const availabilityMap = {};
     availabilityResults.forEach(avail => {
       if (!availabilityMap[avail.experience_id]) {
@@ -545,10 +629,20 @@ const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseI
       }
     });
 
+    // Finalize experience data
     experiences.forEach(exp => {
       exp.tags = exp.tags ? exp.tags.split(',') : [];
       exp.images = imageMap[exp.id] || [];
       exp.availability = availabilityMap[exp.id] || [];
+
+      // Add accommodation constraint info for frontend
+      if (accommodationDetails) {
+        exp.accommodation_constraints = {
+          check_in_time: accommodationDetails.check_in_time,
+          check_out_time: accommodationDetails.check_out_time,
+          filtered_by_accommodation: true
+        };
+      }
 
       if (exp.price === 0) {
         exp.budget_category = 'Free';
@@ -563,6 +657,7 @@ const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseI
 
     console.log('Found experiences:', experiences.length);
     console.log('Experience IDs:', experiences.map(e => e.id));
+    console.log('Accommodation filtering applied:', !!accommodationDetails);
 
     res.status(200).json(experiences);
 
