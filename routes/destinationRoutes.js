@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { createDestination, getAllDestination, getDestinationById, updateDestination } = require('../controllers/destinationController.js');
+const { createDestination, getAllDestination, getDestinationById,getDestinationByExperienceId, updateDestination } = require('../controllers/destinationController.js');
 // const authenticateToken = require('../middleware/auth');
 
 
@@ -12,7 +12,7 @@ router.get('/', getAllDestination);
 
 // Get destination by ID
 router.get('/:id', getDestinationById); 
-
+router.get('/experience/:experienceId', getDestinationByExperienceId); 
 // Update
 router.put('/:id', updateDestination); 
 

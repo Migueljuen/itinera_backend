@@ -964,13 +964,69 @@ const getActiveExperience = async (req, res) => {
 };
 
 
+// const getExperienceById = async (req, res) => {
+//   const { id } = req.params;
+
+//   try {
+//     // Fetch experience and destination
+//     const [rows] = await db.query(
+//       `SELECT e.*, d.name AS destination_name
+//        FROM experience e
+//        JOIN destination d ON e.destination_id = d.destination_id
+//        WHERE e.experience_id = ?`,
+//       [id]
+//     );
+
+//     if (rows.length === 0) {
+//       return res.status(404).json({ message: 'Experience not found' });
+//     }
+
+//     const experience = rows[0];
+
+//     // Fetch tags associated with the experience
+//     const [tagRows] = await db.query(
+//       `SELECT t.name FROM tags t
+//        JOIN experience_tags et ON t.tag_id = et.tag_id
+//        WHERE et.experience_id = ?`,
+//       [id]
+//     );
+//     experience.tags = tagRows.map(tag => tag.name);
+
+//     // Fetch images associated with the experience
+//     const [imageRows] = await db.query(
+//       `SELECT image_url FROM experience_images WHERE experience_id = ?`,
+//       [id]
+//     );
+    
+//     // Convert file system paths to URLs
+//     experience.images = imageRows.map(img => {
+//       // Extract just the filename from the absolute path
+//       const filename = path.basename(img.image_url);
+//       // Return a relative URL path that your server can handle
+//       return `/uploads/experiences/${filename}`;
+//     });
+
+//     res.json(experience);
+//   } catch (err) {
+//     console.error('Error fetching experience:', err);
+//     res.status(500).json({ error: 'Server error', details: err.message });
+//   }
+// }
+
 const getExperienceById = async (req, res) => {
   const { id } = req.params;
 
   try {
-    // Fetch experience and destination
+    // Fetch experience and complete destination data
     const [rows] = await db.query(
-      `SELECT e.*, d.name AS destination_name
+      `SELECT 
+        e.*,
+        d.destination_id,
+        d.name AS destination_name,
+        d.city AS destination_city,
+        d.longitude AS destination_longitude,
+        d.latitude AS destination_latitude,
+        d.description AS destination_description
        FROM experience e
        JOIN destination d ON e.destination_id = d.destination_id
        WHERE e.experience_id = ?`,
@@ -1006,87 +1062,30 @@ const getExperienceById = async (req, res) => {
       return `/uploads/experiences/${filename}`;
     });
 
+    // Structure the destination data as a nested object
+    experience.destination = {
+      destination_id: experience.destination_id,
+      name: experience.destination_name,
+      city: experience.destination_city,
+      longitude: experience.destination_longitude,
+      latitude: experience.destination_latitude,
+      description: experience.destination_description
+    };
+
+    // Remove the flattened destination fields from the root level
+    delete experience.destination_id;
+    delete experience.destination_name;
+    delete experience.destination_city;
+    delete experience.destination_longitude;
+    delete experience.destination_latitude;
+    delete experience.destination_description;
+
     res.json(experience);
   } catch (err) {
     console.error('Error fetching experience:', err);
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 }
-
-
-// const getExperienceById = async (req, res) => {
-//   const { id } = req.params;
-
-//   try {
-//     // Fetch experience and destination
-//     const [rows] = await db.query(
-//       `SELECT e.*, d.name AS destination_name
-//        FROM experience e
-//        JOIN destination d ON e.destination_id = d.destination_id
-//        WHERE e.experience_id = ?`,
-//       [id]
-//     );
-
-//     if (rows.length === 0) {
-//       return res.status(404).json({ message: 'Experience not found' });
-//     }
-
-//     const experience = rows[0];
-
-//     // Fetch tags associated with the experience
-//     const [tagRows] = await db.query(
-//       `SELECT t.name FROM tags t
-//        JOIN experience_tags et ON t.tag_id = et.tag_id
-//        WHERE et.experience_id = ?`,
-//       [id]
-//     );
-//     experience.tags = tagRows.map(tag => tag.name);
-
-//     // Fetch images associated with the experience
-//     const [imageRows] = await db.query(
-//       `SELECT image_url FROM experience_images WHERE experience_id = ?`,
-//       [id]
-//     );
-    
-//     experience.images = imageRows.map(img => {
-//       const filename = path.basename(img.image_url);
-//       return `/uploads/experiences/${filename}`;
-//     });
-
-//     // Fetch availability days for this experience
-//     const [availabilityRows] = await db.query(
-//       `SELECT availability_id, experience_id, day_of_week
-//        FROM availability
-//        WHERE experience_id = ?`,
-//       [id]
-//     );
-
-//     // For each availability day, fetch the time slots
-//     const availabilityWithSlots = await Promise.all(
-//       availabilityRows.map(async (avail) => {
-//         const [timeSlots] = await db.query(
-//           `SELECT slot_id, availability_id, start_time, end_time
-//            FROM availability_time_slots
-//            WHERE availability_id = ?`,
-//           [avail.availability_id]
-//         );
-
-//         return {
-//           ...avail,
-//           time_slots: timeSlots,
-//         };
-//       })
-//     );
-
-//     experience.availability = availabilityWithSlots;
-
-//     res.json(experience);
-
-//   } catch (err) {
-//     console.error('Error fetching experience:', err);
-//     res.status(500).json({ error: 'Server error', details: err.message });
-//   }
-// };
 
 const getExperienceByUserID = async (req, res) => {
   const { user_id } = req.params;

@@ -51,6 +51,35 @@ const getAllDestination = async (req, res) => {
   }
 };
 
+const getDestinationByExperienceId = async (req, res) => {
+  const { experienceId } = req.params; 
+
+  try {
+    // Join experience and destination tables to get destination data for the experience
+    const [result] = await db.query(`
+      SELECT 
+        d.destination_id,
+        d.name,
+        d.city,
+        d.longitude,
+        d.latitude,
+        d.description as destination_description
+      FROM experience e
+      JOIN destination d ON e.destination_id = d.destination_id
+      WHERE e.experience_id = ?
+    `, [experienceId]);
+
+    if (result.length === 0) {
+      return res.status(404).json({ error: 'Experience not found or destination not available' });
+    }
+
+    res.status(200).json(result[0]);
+  } catch (err) {
+    console.error('Error fetching destination by experience ID:', err);
+    res.status(500).json({ error: 'Failed to fetch destination for experience' });
+  }
+};
+
 const getDestinationById = async (req, res) => {
   const { id } = req.params; 
 
@@ -102,4 +131,4 @@ const updateDestination = async (req, res) => {
 };
 
 
-module.exports = { createDestination, getAllDestination, getDestinationById, updateDestination  };
+module.exports = { createDestination, getAllDestination, getDestinationById,getDestinationByExperienceId, updateDestination  };
