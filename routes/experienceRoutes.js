@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { upload, createExperienceHandler, createExperience, getAllExperience,getAvailableTimeSlots, getExperienceById, updateExperience, saveExperience,getActiveExperience , getSavedExperiences, getExperienceByUserID} = require('../controllers/experienceController.js');
+const { upload, createExperienceHandler, createExperience, getAllExperience,getAvailableTimeSlots,getExperienceAvailability, getExperienceById, updateExperience, saveExperience,getActiveExperience , getSavedExperiences, getExperienceByUserID} = require('../controllers/experienceController.js');
 // const authenticateToken = require('../middleware/auth');
 
 
@@ -10,6 +10,7 @@ router.post('/save', saveExperience);
 router.get('/saved/:user_id', getSavedExperiences);
 router.get('/user/:user_id', getExperienceByUserID);
 router.get('/:id/available-slots', getAvailableTimeSlots);
+router.get('/:id/availability', getExperienceAvailability);
 
 router.get('/', getAllExperience); 
 router.get('/active', getActiveExperience);

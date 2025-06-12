@@ -1,15 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const itineraryExperienceController = require('../controllers/itineraryExperienceController');
+const itineraryController = require('../controllers/itineraryExperienceController');
 
 // Route for adding experiences to an itinerary
-router.post('/:itinerary_id/experiences', itineraryExperienceController.addExperienceToItinerary);
+// Bulk operations (recommended for better performance)
+router.put('/:id/items/bulk-update', itineraryController.bulkUpdateItineraryItems);
+router.delete('/:id/items/bulk-delete', itineraryController.bulkDeleteItineraryItems);
 
-// Route for getting all experiences for a specific itinerary
-router.get('/:itinerary_id/experiences', itineraryExperienceController.getExperiencesForItinerary);
-router.put('/:itinerary_id/experiences', itineraryExperienceController.updateItineraryItems);
-
-// Route for deleting an experience from an itinerary
-router.delete('/:itinerary_id/experiences/:experience_id', itineraryExperienceController.deleteExperienceFromItinerary);
-
+// Single item operations (alternative endpoints)
+router.put('/:id/items/:item_id', itineraryController.updateItineraryItem);
+router.delete('/:id/items/:item_id', itineraryController.deleteItineraryItem);
 module.exports = router;

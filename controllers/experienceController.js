@@ -4,6 +4,7 @@ const db = require('../config/db.js');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const dayjs = require('dayjs');
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -667,6 +668,30 @@ const getAllExperience = async (req, res) => {
   }
 };
 
+const getExperienceAvailability = async (req, res) => {
+  const experienceId = req.params.id;
+  const { day } = req.query;
+
+  if (!day) {
+    return res.status(400).json({ error: 'Missing "day" query parameter.' });
+  }
+
+  try {
+    const [availability] = await db.execute(
+      `SELECT ea.availability_id, ea.day_of_week, ats.start_time, ats.end_time
+       FROM EXPERIENCE_AVAILABILITY ea
+       JOIN AVAILABILITY_TIME_SLOTS ats ON ea.availability_id = ats.availability_id
+       WHERE ea.experience_id = ? AND ea.day_of_week = ?`,
+      [experienceId, day]
+    );
+
+    res.json({ availability });
+  } catch (error) {
+    console.error('Error fetching availability:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 const getAvailableTimeSlots = async (req, res) => {
   const experience_id = req.params.id;
   const { date, itinerary_id, item_id } = req.query;
@@ -693,7 +718,8 @@ const getAvailableTimeSlots = async (req, res) => {
       JOIN itinerary i ON ii.itinerary_id = i.itinerary_id
       WHERE ii.itinerary_id = ? 
         AND TIMESTAMPDIFF(DAY, i.start_date, ?) + 1 = ii.day_number
-        AND ii.id != ?
+     AND ii.item_id != ?
+
     `, [itinerary_id, date, item_id]);
 
     // Step 3: Filter out conflicting time slots
@@ -984,4 +1010,4 @@ const getSavedExperiences = async (req, res) => {
 
 
 
-module.exports = { upload, createExperienceHandler: [upload.array('images', 5), createExperience], createExperience, getAllExperience, getExperienceById, getAvailableTimeSlots, updateExperience, saveExperience, getSavedExperiences, getExperienceByUserID, getActiveExperience };
+module.exports = { upload, createExperienceHandler: [upload.array('images', 5), createExperience], createExperience, getAllExperience,getExperienceAvailability, getExperienceById, getAvailableTimeSlots, updateExperience, saveExperience, getSavedExperiences, getExperienceByUserID, getActiveExperience };
