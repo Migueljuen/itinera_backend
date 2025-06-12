@@ -7,6 +7,7 @@ router.post('/:itinerary_id/experiences', itineraryExperienceController.addExper
 
 // Route for getting all experiences for a specific itinerary
 router.get('/:itinerary_id/experiences', itineraryExperienceController.getExperiencesForItinerary);
+router.put('/:itinerary_id/experiences', itineraryExperienceController.updateItineraryItems);
 
 // Route for deleting an experience from an itinerary
 router.delete('/:itinerary_id/experiences/:experience_id', itineraryExperienceController.deleteExperienceFromItinerary);

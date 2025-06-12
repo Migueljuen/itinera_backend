@@ -44,6 +44,64 @@ const getExperiencesForItinerary = async (req, res) => {
   }
 };
 
+const updateItineraryItems = async (req, res) => {
+  const { itinerary_id, items } = req.body;
+  if (!itinerary_id || !Array.isArray(items)) {
+    return res.status(400).json({ message: "Invalid payload" });
+  }
+
+  const connection = await db.getConnection();
+  await connection.beginTransaction();
+
+  try {
+    for (const item of items) {
+      const { item_id, start_time, end_time, day_number, custom_note } = item;
+
+      if (!start_time || !end_time || !day_number || !item_id) {
+        await connection.rollback();
+        return res.status(400).json({ message: "Missing fields in item" });
+      }
+
+      // Validate time conflict
+      const [conflicts] = await connection.query(
+        `SELECT * FROM itinerary_items 
+         WHERE itinerary_id = ? AND day_number = ? AND id != ? 
+         AND ((? < end_time AND ? >= start_time) OR (? < end_time AND ? >= start_time))`,
+        [
+          itinerary_id,
+          day_number,
+          item_id,
+          start_time, start_time,
+          end_time, end_time
+        ]
+      );
+
+      if (conflicts.length > 0) {
+        await connection.rollback();
+        return res.status(409).json({ 
+          message: `Time conflict on day ${day_number} for item ${item_id}` 
+        });
+      }
+
+      await connection.query(
+        `UPDATE itinerary_items 
+         SET start_time = ?, end_time = ?, day_number = ?, custom_note = ?, updated_at = NOW() 
+         WHERE id = ?`,
+        [start_time, end_time, day_number, custom_note || '', item_id]
+      );
+    }
+
+    await connection.commit();
+    res.status(200).json({ message: "Itinerary updated successfully" });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Update failed:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  } finally {
+    connection.release();
+  }
+};
+
 // Delete an experience from an itinerary
 const deleteExperienceFromItinerary = async (req, res) => {
   const { itinerary_id, experience_id } = req.params;
@@ -68,5 +126,6 @@ const deleteExperienceFromItinerary = async (req, res) => {
 module.exports = {
   addExperienceToItinerary,
   getExperiencesForItinerary,
+  updateItineraryItems,
   deleteExperienceFromItinerary
 };
