@@ -121,7 +121,7 @@ const generatedItinerary = await smartItineraryGeneration({
           start_time: item.start_time,
           end_time: item.end_time,
           custom_note: item.auto_note || '',
-          experience_name: experience.name,
+          experience_name: experience.title,
           experience_description: experience.description,
           destination_name: experience.destination_name,
           destination_city: experience.destination_city,
