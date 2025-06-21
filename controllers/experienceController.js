@@ -1,4 +1,5 @@
 require('dotenv').config();
+const { CITY_CENTERS, calculateDistanceFromCityCenter } = require('../utils/cityUtils');
 
 const db = require('../config/db.js');
 const multer = require('multer');
@@ -112,7 +113,7 @@ const createExperience = async (req, res) => {
       return res.status(400).json({ message: 'One or more tag IDs do not exist' });
     }
 
-    // Handle destination - either use existing one or create new one
+// Handle destination - either use existing one or create new one
     let finalDestinationId;
 
     if (destination_id) {
@@ -130,18 +131,46 @@ const createExperience = async (req, res) => {
         await connection.rollback();
         return res.status(400).json({ message: 'All destination fields are required when creating a new destination' });
       }
+
+      // Check for existing destination first
       const [existingDestination] = await connection.query(
         'SELECT destination_id FROM destination WHERE name = ? AND city = ?', 
         [destination_name, city]
       );
+      
       if (existingDestination.length > 0) {
         finalDestinationId = existingDestination[0].destination_id;
+        console.log(`✅ Using existing destination: ${destination_name} (ID: ${finalDestinationId})`);
       } else {
+        // ✅ NEW: Calculate distance from city center
+        let distanceFromCenter = null;
+        
+        const cityCenter = CITY_CENTERS[city];
+        if (cityCenter) {
+          distanceFromCenter = calculateDistanceFromCityCenter(
+            parseFloat(latitude),
+            parseFloat(longitude),
+            cityCenter.lat,
+            cityCenter.lng
+          );
+          
+          // Round to 2 decimal places
+          distanceFromCenter = Math.round(distanceFromCenter * 100) / 100;
+          
+          console.log(`✅ Calculated distance for ${destination_name}: ${distanceFromCenter}km from ${city} center`);
+        } else {
+          console.warn(`⚠️ Warning: No city center coordinates found for "${city}". Distance will be NULL.`);
+        }
+
+        // ✅ UPDATED: Insert destination with calculated distance
         const [newDestination] = await connection.query(
-          'INSERT INTO destination (name, city, description, latitude, longitude) VALUES (?, ?, ?, ?, ?)',
-          [destination_name, city, destination_description, latitude, longitude]
+          'INSERT INTO destination (name, city, description, latitude, longitude, distance_from_city_center) VALUES (?, ?, ?, ?, ?, ?)',
+          [destination_name, city, destination_description, latitude, longitude, distanceFromCenter]
         );
+        
         finalDestinationId = newDestination.insertId;
+        
+        console.log(`✅ New destination created: ${destination_name} (ID: ${finalDestinationId}, Distance: ${distanceFromCenter}km)`);
       }
     }
 

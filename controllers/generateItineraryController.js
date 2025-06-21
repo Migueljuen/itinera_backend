@@ -14,6 +14,7 @@ const generateItinerary = async (req, res) => {
     explore_time, 
     budget,
     activity_intensity,
+    travel_distance, // New field
     title,
     notes
   } = req.body;
@@ -23,7 +24,7 @@ const generateItinerary = async (req, res) => {
 
   // Validate required fields
   if (!traveler_id || !start_date || !end_date || !experience_types || 
-      !travel_companion || !explore_time || !budget || !activity_intensity) {
+      !travel_companion || !explore_time || !budget || !activity_intensity || !travel_distance) {
     return res.status(400).json({ 
       message: 'All preference fields are required for itinerary generation',
       missing_fields: {
@@ -34,7 +35,8 @@ const generateItinerary = async (req, res) => {
         travel_companion: !travel_companion,
         explore_time: !explore_time,
         budget: !budget,
-        activity_intensity: !activity_intensity
+        activity_intensity: !activity_intensity,
+        travel_distance: !travel_distance
       }
     });
   }
@@ -44,6 +46,14 @@ const generateItinerary = async (req, res) => {
   if (!validIntensities.includes(activity_intensity.toLowerCase())) {
     return res.status(400).json({ 
       message: 'Invalid activity_intensity. Must be: low, moderate, or high' 
+    });
+  }
+
+  // Validate travel_distance values
+  const validTravelDistances = ['nearby', 'moderate', 'far'];
+  if (!validTravelDistances.includes(travel_distance.toLowerCase())) {
+    return res.status(400).json({ 
+      message: 'Invalid travel_distance. Must be: nearby, moderate, or far' 
     });
   }
 
@@ -57,13 +67,14 @@ const generateItinerary = async (req, res) => {
 
     const totalDays = endDate.diff(startDate, 'day') + 1;
 
-    // Step 1: Get suitable experiences based on preferences
+    // Step 1: Get suitable experiences based on preferences (including travel distance)
     const experiences = await getFilteredExperiences({
       city,
       experience_types,
       travel_companion,
       explore_time,
       budget,
+      travel_distance, // Pass travel distance to filtering function
       start_date,
       end_date
     });
@@ -75,15 +86,16 @@ const generateItinerary = async (req, res) => {
     }
 
     // Step 2: Generate smart itinerary distribution with activity intensity
-const generatedItinerary = await smartItineraryGeneration({
-  experiences,
-  totalDays,
-  experience_types,
-  explore_time,
-  travel_companion,
-  activity_intensity,
-  start_date 
-});
+    const generatedItinerary = await smartItineraryGeneration({
+      experiences,
+      totalDays,
+      experience_types,
+      explore_time,
+      travel_companion,
+      activity_intensity,
+      travel_distance, // Pass travel distance to generation function
+      start_date 
+    });
 
     const itineraryTitle = title || `${city || 'Adventure'} - ${startDate.format('MMM DD')} to ${endDate.format('MMM DD, YYYY')}`;
 
@@ -140,6 +152,7 @@ const generatedItinerary = await smartItineraryGeneration({
       total_experiences: experiences.length,
       selected_experiences: generatedItinerary.length,
       activity_intensity: activity_intensity,
+      travel_distance: travel_distance, // Include in response
       generated: true
     });
 
@@ -148,6 +161,7 @@ const generatedItinerary = await smartItineraryGeneration({
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
+
 
 const saveItinerary = async (req, res) => {
   const {
@@ -220,9 +234,6 @@ const saveItinerary = async (req, res) => {
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
-
-// Don't forget to add this route to your router
-// router.post('/itinerary/save', saveItinerary);
 
 
 // Helper function to check experience availability - SIMPLIFIED
@@ -298,6 +309,7 @@ const smartItineraryGeneration = async ({
   explore_time,
   travel_companion,
   activity_intensity,
+  travel_distance, // Added new parameter
   start_date
 }) => {
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -313,11 +325,14 @@ const smartItineraryGeneration = async ({
   // Parse start date to get day of week for each day
   const startDate = dayjs(start_date);
   
+  console.log(`🗺️ Starting itinerary generation with inclusive ${travel_distance} travel distance preference`);
+  console.log(`📊 Total experiences available: ${experiences.length}`);
+  
   for (let day = 1; day <= totalDays; day++) {
     const currentDate = startDate.add(day - 1, 'day');
     const dayOfWeek = dayNames[currentDate.day()];
     
-    console.log(`Planning day ${day} (${dayOfWeek})`);
+    console.log(`📅 Planning day ${day} (${dayOfWeek}) with ${travel_distance} travel distance preference`);
     
     // Filter experiences available on this day of week with their time slots
     const availableExperiences = [];
@@ -350,7 +365,7 @@ const smartItineraryGeneration = async ({
       }
     }
     
-    console.log(`Available experiences for ${dayOfWeek}:`, availableExperiences.length);
+    console.log(`✅ Available experiences for ${dayOfWeek}: ${availableExperiences.length}`);
     
     // Select experiences for this day (avoid duplicates across days)
     const usedExperienceIds = itinerary.map(item => item.experience_id);
@@ -358,9 +373,72 @@ const smartItineraryGeneration = async ({
       exp => !usedExperienceIds.includes(exp.experience_id)
     );
     
-    // Shuffle and select experiences for this day
-    const shuffledExperiences = unusedExperiences.sort(() => Math.random() - 0.5);
-    const selectedExperiences = shuffledExperiences.slice(0, experiencesPerDay);
+    console.log(`🔄 Unused experiences for day ${day}: ${unusedExperiences.length}`);
+    
+    // Apply travel distance-based sorting/prioritization - INCLUSIVE APPROACH
+    let sortedExperiences = [...unusedExperiences];
+    
+    if (travel_distance === 'nearby') {
+      // Nearby: Prioritize shortest distances first (strict preference for close experiences)
+      sortedExperiences.sort((a, b) => {
+        const aDistance = parseFloat(a.distance_from_city_center) || 0;
+        const bDistance = parseFloat(b.distance_from_city_center) || 0;
+        return aDistance - bDistance;
+      });
+      console.log(`🎯 Prioritizing by shortest distances first (nearby preference - targeting ≤10km experiences)`);
+      
+    } else if (travel_distance === 'moderate') {
+      // Moderate: Balanced mix - slight preference for closer, but includes variety
+      sortedExperiences.sort((a, b) => {
+        const aDistance = parseFloat(a.distance_from_city_center) || 0;
+        const bDistance = parseFloat(b.distance_from_city_center) || 0;
+        
+        // Add some randomness to the sorting for variety while maintaining slight preference for closer
+        const randomFactor = (Math.random() - 0.5) * 3; // ±1.5km random factor
+        return (aDistance - bDistance) + randomFactor;
+      });
+      console.log(`⚖️ Prioritizing with balanced mix (moderate preference - targeting ≤20km with variety)`);
+      
+    } else if (travel_distance === 'far') {
+      // Far: Prioritize variety and exploration - mix of all distances
+      // Shuffle experiences but with slight preference for different distance ranges
+      const nearbyExps = sortedExperiences.filter(exp => (parseFloat(exp.distance_from_city_center) || 0) <= 10);
+      const moderateExps = sortedExperiences.filter(exp => {
+        const dist = parseFloat(exp.distance_from_city_center) || 0;
+        return dist > 10 && dist <= 20;
+      });
+      const farExps = sortedExperiences.filter(exp => (parseFloat(exp.distance_from_city_center) || 0) > 20);
+      const nullExps = sortedExperiences.filter(exp => !exp.distance_from_city_center);
+      
+      // Mix them with some variety but ensure far experiences get priority
+      sortedExperiences = [
+        ...farExps.sort(() => Math.random() - 0.5),
+        ...moderateExps.sort(() => Math.random() - 0.5),
+        ...nearbyExps.sort(() => Math.random() - 0.5),
+        ...nullExps.sort(() => Math.random() - 0.5)
+      ];
+      
+      console.log(`🌍 Prioritizing with full variety and exploration (far preference - all distances included)`);
+      console.log(`📊 Distance distribution: ${nearbyExps.length} nearby, ${moderateExps.length} moderate, ${farExps.length} far, ${nullExps.length} unknown`);
+      
+    } else {
+      // Default: Random shuffle for any other values
+      sortedExperiences = sortedExperiences.sort(() => Math.random() - 0.5);
+      console.log(`🎲 Using random shuffle (default behavior)`);
+    }
+    
+    // Log distance info for selected experiences
+    if (sortedExperiences.length > 0) {
+      const topExperiences = sortedExperiences.slice(0, experiencesPerDay);
+      const distances = topExperiences.map(exp => {
+        const dist = exp.distance_from_city_center;
+        return dist ? `${dist}km` : 'Unknown';
+      });
+      console.log(`🎯 Top ${experiencesPerDay} experiences for day ${day} distances: [${distances.join(', ')}]`);
+    }
+    
+    // Select experiences for this day
+    const selectedExperiences = sortedExperiences.slice(0, experiencesPerDay);
     
     // Schedule experiences with their actual time slots
     selectedExperiences.forEach((experience, index) => {
@@ -369,14 +447,27 @@ const smartItineraryGeneration = async ({
         Math.floor(Math.random() * experience.availableTimeSlots.length)
       ];
       
+      // Create more detailed auto_note including travel distance context
+      const distanceInfo = experience.distance_from_city_center 
+        ? `${experience.distance_from_city_center}km from center`
+        : 'distance unknown';
+      
+      let autoNote = `${experience.title} - ${dayOfWeek} at ${randomTimeSlot.start_time} (${distanceInfo})`;
+      
       itinerary.push({
         experience_id: experience.experience_id,
         day_number: day,
         start_time: randomTimeSlot.start_time,
         end_time: randomTimeSlot.end_time,
-        auto_note: `${experience.title} - ${dayOfWeek} at ${randomTimeSlot.start_time}`
+        auto_note: autoNote
       });
+      
+      console.log(`➕ Added: ${experience.title} (${distanceInfo}) on day ${day}`);
     });
+    
+    if (selectedExperiences.length < experiencesPerDay) {
+      console.log(`⚠️ Warning: Only found ${selectedExperiences.length}/${experiencesPerDay} experiences for day ${day}`);
+    }
   }
   
   // Sort itinerary by day and time
@@ -387,17 +478,37 @@ const smartItineraryGeneration = async ({
     return a.start_time.localeCompare(b.start_time);
   });
   
-  console.log('Generated itinerary with proper time slots:', itinerary.length);
+  console.log(`🎉 Generated itinerary with inclusive ${travel_distance} travel distance preference: ${itinerary.length} experiences total`);
+  
+  // Final summary of distance distribution in the itinerary
+  const itineraryDistances = itinerary.map(item => {
+    const exp = experiences.find(e => e.experience_id === item.experience_id);
+    return exp ? exp.distance_from_city_center : null;
+  }).filter(d => d !== null);
+  
+  if (itineraryDistances.length > 0) {
+    const minDist = Math.min(...itineraryDistances);
+    const maxDist = Math.max(...itineraryDistances);
+    const avgDist = (itineraryDistances.reduce((a, b) => a + b, 0) / itineraryDistances.length).toFixed(1);
+    
+    console.log(`📊 Final itinerary distance stats: ${minDist}km - ${maxDist}km (avg: ${avgDist}km)`);
+  }
+  
   return itinerary;
 };
 
 // Corrected filtering function that properly joins with availability tables
+
+// Import the city centers at the top of your file
+const { CITY_CENTERS, calculateDistanceFromCityCenter } = require('../utils/cityUtils');
+
 const getFilteredExperiences = async ({
   city,
   experience_types,
   travel_companion,
   explore_time,
   budget,
+  travel_distance, // New parameter
   start_date,
   end_date
 }) => {
@@ -407,7 +518,8 @@ const getFilteredExperiences = async ({
       experience_types,
       travel_companion,
       explore_time,
-      budget
+      budget,
+      travel_distance // Log the new parameter
     });
 
     // Calculate trip day names for availability filtering
@@ -458,6 +570,9 @@ const getFilteredExperiences = async ({
         e.created_at,
         d.name as destination_name,
         d.city,
+        d.latitude,
+        d.longitude,
+        d.distance_from_city_center,
         GROUP_CONCAT(DISTINCT t.name) as tag_names,
         GROUP_CONCAT(DISTINCT t.tag_id) as tag_ids
       FROM experience e
@@ -469,10 +584,93 @@ const getFilteredExperiences = async ({
 
     const queryParams = [];
 
-    // Filter by city only if provided
+    // FIXED: Case-insensitive city center lookup
+    let selectedCityCenter = null;
     if (city && city.trim()) {
+      // Try exact match first, then case-insensitive variations
+      const cityKey = city.trim();
+      selectedCityCenter = CITY_CENTERS[cityKey] || 
+                          CITY_CENTERS[cityKey.toLowerCase()] || 
+                          CITY_CENTERS[cityKey.charAt(0).toUpperCase() + cityKey.slice(1).toLowerCase()];
+      
+      if (!selectedCityCenter) {
+        // Try all possible variations
+        const cityVariations = [
+          cityKey,
+          cityKey.toLowerCase(), 
+          cityKey.toUpperCase(),
+          cityKey.charAt(0).toUpperCase() + cityKey.slice(1).toLowerCase(),
+          // Handle common variations
+          cityKey.replace(/\s+/g, ''), // Remove spaces
+          cityKey.replace(/\s+/g, '').toLowerCase(),
+          cityKey.replace(/\s+/g, '').charAt(0).toUpperCase() + cityKey.replace(/\s+/g, '').slice(1).toLowerCase()
+        ];
+        
+        for (const variation of cityVariations) {
+          if (CITY_CENTERS[variation]) {
+            selectedCityCenter = CITY_CENTERS[variation];
+            console.log(`✅ Found city center using variation: "${variation}" for input: "${city}"`);
+            break;
+          }
+        }
+      } else {
+        console.log(`✅ Found city center for "${city}":`, selectedCityCenter);
+      }
+      
+      if (!selectedCityCenter) {
+        console.warn(`⚠️ No city center coordinates found for "${city}". Available cities:`, Object.keys(CITY_CENTERS).slice(0, 10));
+        console.warn(`⚠️ Falling back to city-based filtering.`);
+      }
+    }
+
+    if (selectedCityCenter && travel_distance) {
+      // CROSS-CITY DISTANCE-BASED FILTERING
+      const distanceMap = {
+        'nearby': 10,    // ≤20km from selected city center (increased from 10)
+        'moderate': 40,  // ≤40km from selected city center (increased from 20)
+        'far': null      // All distances from selected city center
+      };
+      
+      const maxDistance = distanceMap[travel_distance.toLowerCase()];
+      
+      if (maxDistance !== null && maxDistance !== undefined) {
+        // Calculate distance from selected city center for each destination
+        // Include destinations within the distance threshold regardless of their administrative city
+        query += ` AND (
+          d.distance_from_city_center IS NULL OR
+          (6371 * acos(
+            cos(radians(?)) * cos(radians(d.latitude)) * 
+            cos(radians(d.longitude) - radians(?)) + 
+            sin(radians(?)) * sin(radians(d.latitude))
+          )) <= ?
+        )`;
+        
+        queryParams.push(
+          selectedCityCenter.lat,   // Selected city center latitude
+          selectedCityCenter.lng,   // Selected city center longitude  
+          selectedCityCenter.lat,   // Selected city center latitude (for sin calculation)
+          maxDistance               // Maximum distance
+        );
+        
+        console.log(`🌍 Applied cross-city distance filter: ${travel_distance} (≤${maxDistance}km from ${city} center)`);
+        console.log(`📍 Using ${city} center coordinates: ${selectedCityCenter.lat}, ${selectedCityCenter.lng}`);
+        
+      } else if (travel_distance.toLowerCase() === 'far') {
+        // For "far": No distance restriction, but we can still log the city center being used
+        console.log(`🌍 Applied cross-city distance filter: ${travel_distance} (no distance limit from ${city} center)`);
+        console.log(`📍 Reference point: ${city} center coordinates: ${selectedCityCenter.lat}, ${selectedCityCenter.lng}`);
+        // No additional filtering needed - all destinations included
+      }
+      
+    } else if (city && city.trim()) {
+      // FALLBACK: Traditional city-based filtering if no city center coordinates or travel_distance
       query += ` AND LOWER(d.city) LIKE ?`;
       queryParams.push(`%${city.trim().toLowerCase()}%`);
+      console.log(`🏙️ Applied traditional city-based filter: ${city} (administrative boundaries)`);
+      
+      if (travel_distance) {
+        console.warn(`⚠️ Travel distance preference "${travel_distance}" ignored due to missing city center coordinates`);
+      }
     }
 
     // Filter by travel companion
@@ -534,7 +732,7 @@ const getFilteredExperiences = async ({
     // Group by to handle the aggregated fields
     query += ` GROUP BY e.experience_id, e.creator_id, e.destination_id, e.title, e.description, 
                e.price, e.unit, e.status, e.travel_companion, e.created_at,
-               d.name, d.city`;
+               d.name, d.city, d.latitude, d.longitude, d.distance_from_city_center`;
 
     // Filter by experience types after grouping if provided
     if (experience_types && experience_types.length > 0) {
@@ -547,7 +745,38 @@ const getFilteredExperiences = async ({
       query += `)`;
     }
 
-    query += ` ORDER BY e.created_at DESC`;
+    // Updated ordering logic for cross-city approach
+    if (selectedCityCenter && travel_distance) {
+      if (travel_distance.toLowerCase() === 'nearby') {
+        // Nearby: Order by actual distance from selected city center (closest first)
+        query += ` ORDER BY 
+          (6371 * acos(
+            cos(radians(${selectedCityCenter.lat})) * cos(radians(d.latitude)) * 
+            cos(radians(d.longitude) - radians(${selectedCityCenter.lng})) + 
+            sin(radians(${selectedCityCenter.lat})) * sin(radians(d.latitude))
+          )) ASC, 
+          e.created_at DESC`;
+      } else if (travel_distance.toLowerCase() === 'moderate') {
+        // Moderate: Balanced ordering with some preference for closer experiences
+        query += ` ORDER BY 
+          CASE 
+            WHEN d.distance_from_city_center IS NULL THEN 1
+            WHEN (6371 * acos(
+              cos(radians(${selectedCityCenter.lat})) * cos(radians(d.latitude)) * 
+              cos(radians(d.longitude) - radians(${selectedCityCenter.lng})) + 
+              sin(radians(${selectedCityCenter.lat})) * sin(radians(d.latitude))
+            )) <= 10 THEN 2
+            ELSE 3
+          END,
+          e.created_at DESC`;
+      } else {
+        // Far: Mix variety with some recency
+        query += ` ORDER BY e.created_at DESC`;
+      }
+    } else {
+      // Fallback ordering
+      query += ` ORDER BY e.created_at DESC`;
+    }
 
     console.log('Generated Query:', query);
     console.log('Query Parameters:', queryParams);
@@ -556,7 +785,7 @@ const getFilteredExperiences = async ({
     const [experiences] = await db.query(query, queryParams);
     console.log('Initial experiences found:', experiences.length);
 
-    // Add images to each experience
+    // Add images and calculate actual distances from selected city center
     const processedExperiences = [];
     for (const experience of experiences) {
       const [images] = await db.query(`
@@ -565,15 +794,49 @@ const getFilteredExperiences = async ({
         LIMIT 1
       `, [experience.experience_id]);
 
+      // Calculate actual distance from selected city center if available
+      let actualDistanceFromSelectedCity = null;
+      if (selectedCityCenter && experience.latitude && experience.longitude) {
+        actualDistanceFromSelectedCity = calculateDistanceFromCityCenter(
+          parseFloat(experience.latitude),
+          parseFloat(experience.longitude),
+          selectedCityCenter.lat,
+          selectedCityCenter.lng
+        );
+        actualDistanceFromSelectedCity = Math.round(actualDistanceFromSelectedCity * 100) / 100;
+      }
+
       processedExperiences.push({
         ...experience,
         tag_names: experience.tag_names ? experience.tag_names.split(',') : [],
         tag_ids: experience.tag_ids ? experience.tag_ids.split(',').map(Number) : [],
-        image_url: images.length > 0 ? images[0].image_url : null
+        image_url: images.length > 0 ? images[0].image_url : null,
+        // Include both distance values for debugging/info
+        distance_from_city_center: experience.distance_from_city_center, // Original (from destination's own city center)
+        distance_from_selected_city: actualDistanceFromSelectedCity // New (from selected city center)
       });
     }
 
     console.log('Final processed experiences:', processedExperiences.length);
+    console.log('Travel distance filter applied:', travel_distance);
+    
+    // Debug: Show distance distribution from selected city center
+    if (travel_distance && selectedCityCenter) {
+      const distances = processedExperiences
+        .map(exp => exp.distance_from_selected_city)
+        .filter(d => d !== null)
+        .sort((a, b) => a - b);
+      
+      console.log(`📊 Distance distribution from ${city} center:`, {
+        min: distances[0] || 'N/A',
+        max: distances[distances.length - 1] || 'N/A',
+        count_with_distance: distances.length,
+        count_with_null: processedExperiences.length - distances.length,
+        sample_distances: distances.slice(0, 5),
+        cities_included: [...new Set(processedExperiences.map(exp => exp.city))]
+      });
+    }
+    
     return processedExperiences;
 
   } catch (error) {
@@ -626,7 +889,7 @@ const getExperiencesWithTimeSlots = async (experienceIds, tripDayNames) => {
     console.error('Error getting experiences with time slots:', error);
     return [];
   }
-};
+};  
 
 
 // Generate appropriate time slots for experiences - UNCHANGED
