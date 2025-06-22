@@ -701,23 +701,96 @@ const getExperienceAvailability = async (req, res) => {
   const experienceId = req.params.id;
   const { day } = req.query;
 
-  if (!day) {
-    return res.status(400).json({ error: 'Missing "day" query parameter.' });
-  }
+  console.log('=== AVAILABILITY API DEBUG ===');
+  console.log('Experience ID:', experienceId);
+  console.log('Day parameter:', day);
+  console.log('All query params:', req.query);
+  console.log('Request URL:', req.url);
+  console.log('Request method:', req.method);
 
   try {
-    const [availability] = await db.execute(
-      `SELECT ea.availability_id, ea.day_of_week, ats.start_time, ats.end_time
-       FROM EXPERIENCE_AVAILABILITY ea
-       JOIN AVAILABILITY_TIME_SLOTS ats ON ea.availability_id = ats.availability_id
-       WHERE ea.experience_id = ? AND ea.day_of_week = ?`,
-      [experienceId, day]
+    // First, check if the experience exists
+    const [experienceCheck] = await db.query(
+      'SELECT experience_id FROM experience WHERE experience_id = ?',
+      [experienceId]
     );
 
-    res.json({ availability });
+    console.log('Experience check result:', experienceCheck);
+
+    if (experienceCheck.length === 0) {
+      return res.status(404).json({ error: 'Experience not found' });
+    }
+
+    // Get availability data with time slots - using exact schema names
+    let query = `SELECT 
+      ea.availability_id,
+      ea.experience_id,
+      ea.day_of_week,
+      ats.slot_id,
+      ats.start_time,
+      ats.end_time
+     FROM experience_availability ea
+     JOIN availability_time_slots ats ON ea.availability_id = ats.availability_id
+     WHERE ea.experience_id = ?`;
+    
+    const params = [experienceId];
+    
+    // Add day filter only if day parameter is provided
+    if (day) {
+      query += ` AND ea.day_of_week = ?`;
+      params.push(day);
+    }
+    
+    query += ` ORDER BY ea.day_of_week, ats.start_time`;
+    
+    console.log('Final query:', query);
+    console.log('Query params:', params);
+    
+    const [availabilityResults] = await db.query(query, params);
+    
+    console.log('Raw availability results:', availabilityResults);
+
+    if (availabilityResults.length === 0) {
+      const message = day 
+        ? `No availability found for experience ${experienceId} on ${day}` 
+        : `No availability found for experience ${experienceId}`;
+      return res.status(404).json({ error: message });
+    }
+
+    // Process the results to match the structure from getAllExperience
+    const availability = [];
+    const availabilityMap = {};
+
+    availabilityResults.forEach(result => {
+      if (!availabilityMap[result.availability_id]) {
+        availabilityMap[result.availability_id] = {
+          availability_id: result.availability_id,
+          experience_id: result.experience_id,
+          day_of_week: result.day_of_week,
+          time_slots: []
+        };
+        availability.push(availabilityMap[result.availability_id]);
+      }
+
+      availabilityMap[result.availability_id].time_slots.push({
+        slot_id: result.slot_id,
+        availability_id: result.availability_id,
+        start_time: result.start_time,
+        end_time: result.end_time
+      });
+    });
+
+    console.log('Processed availability:', availability);
+
+    res.json({ 
+      experience_id: parseInt(experienceId),
+      requested_day: day || 'all',
+      availability: availability 
+    });
+
   } catch (error) {
     console.error('Error fetching availability:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 };
 
