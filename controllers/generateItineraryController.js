@@ -1,6 +1,7 @@
 const dayjs = require('dayjs');
 const db = require('../config/db.js');
 const path = require('path');
+const { CITY_CENTERS, calculateDistanceFromCityCenter } = require('../utils/cityUtils');
 
 
 const generateItinerary = async (req, res) => {
@@ -162,7 +163,6 @@ const generateItinerary = async (req, res) => {
   }
 };
 
-
 const saveItinerary = async (req, res) => {
   const {
     traveler_id,
@@ -235,50 +235,6 @@ const saveItinerary = async (req, res) => {
   }
 };
 
-
-// Helper function to check experience availability - SIMPLIFIED
-const checkExperienceAvailability = async (experience_id, start_date, end_date, explore_time) => {
-  try {
-    const [availability] = await db.query(`
-      SELECT day_of_week, start_time, end_time
-      FROM experience_availability
-      WHERE experience_id = ?
-    `, [experience_id]);
-
-    // If no availability records, assume it's available (or set default policy)
-    if (availability.length === 0) {
-      console.log(`No availability records for experience ${experience_id}, defaulting to available`);
-      return true;
-    }
-
-    // Check if experience matches explore_time preference
-    const hasMatchingTimeSlots = availability.some(slot => {
-      const startHour = parseInt(slot.start_time.split(':')[0]);
-      const endHour = parseInt(slot.end_time.split(':')[0]);
-      
-      const isDaytime = startHour >= 6 && endHour <= 18;
-      const isNighttime = startHour >= 18 || endHour <= 6;
-      
-      switch (explore_time) {
-        case 'Daytime':
-          return isDaytime;
-        case 'Nighttime':
-          return isNighttime;
-        case 'Both':
-        default:
-          return true;
-      }
-    });
-
-    return hasMatchingTimeSlots;
-
-  } catch (error) {
-    console.error('Error checking availability:', error);
-    // Default to available on error to prevent blocking all experiences
-    return true;
-  }
-};
-
 // Enhanced helper function to get experience with its actual availability time slots
 const getExperienceWithAvailability = async (experience_id, day_of_week) => {
   try {
@@ -301,7 +257,50 @@ const getExperienceWithAvailability = async (experience_id, day_of_week) => {
   }
 };
 
-// Enhanced smart itinerary generation that respects actual time slots
+// Helper function to check if two time slots conflict
+const timeSlotConflict = (slot1, slot2) => {
+  const start1 = convertTimeToMinutes(slot1.start_time);
+  const end1 = convertTimeToMinutes(slot1.end_time);
+  const start2 = convertTimeToMinutes(slot2.start_time);
+  const end2 = convertTimeToMinutes(slot2.end_time);
+  
+  // Check if slots overlap (with a small buffer to prevent back-to-back scheduling)
+  const buffer = 30; // 30 minutes buffer between activities
+  return !(end1 + buffer <= start2 || end2 + buffer <= start1);
+};
+
+// Helper function to convert time string to minutes since midnight
+const convertTimeToMinutes = (timeString) => {
+  const [hours, minutes] = timeString.split(':').map(Number);
+  return hours * 60 + minutes;
+};
+
+// Helper function to find non-conflicting time slot
+const findNonConflictingSlot = (availableTimeSlots, scheduledSlotsForDay) => {
+  // Sort available slots by start time for better scheduling
+  const sortedSlots = [...availableTimeSlots].sort((a, b) => 
+    convertTimeToMinutes(a.start_time) - convertTimeToMinutes(b.start_time)
+  );
+  
+  for (const slot of sortedSlots) {
+    let hasConflict = false;
+    
+    for (const scheduledSlot of scheduledSlotsForDay) {
+      if (timeSlotConflict(slot, scheduledSlot)) {
+        hasConflict = true;
+        break;
+      }
+    }
+    
+    if (!hasConflict) {
+      return slot;
+    }
+  }
+  
+  return null; // No non-conflicting slot found
+};
+
+// Enhanced smart itinerary generation with conflict detection
 const smartItineraryGeneration = async ({
   experiences,
   totalDays,
@@ -309,7 +308,7 @@ const smartItineraryGeneration = async ({
   explore_time,
   travel_companion,
   activity_intensity,
-  travel_distance, // Added new parameter
+  travel_distance,
   start_date
 }) => {
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -333,6 +332,9 @@ const smartItineraryGeneration = async ({
     const dayOfWeek = dayNames[currentDate.day()];
     
     console.log(`📅 Planning day ${day} (${dayOfWeek}) with ${travel_distance} travel distance preference`);
+    
+    // Keep track of scheduled time slots for this day to avoid conflicts
+    const scheduledSlotsForDay = [];
     
     // Filter experiences available on this day of week with their time slots
     const availableExperiences = [];
@@ -379,7 +381,6 @@ const smartItineraryGeneration = async ({
     let sortedExperiences = [...unusedExperiences];
     
     if (travel_distance === 'nearby') {
-      // Nearby: Prioritize shortest distances first (strict preference for close experiences)
       sortedExperiences.sort((a, b) => {
         const aDistance = parseFloat(a.distance_from_city_center) || 0;
         const bDistance = parseFloat(b.distance_from_city_center) || 0;
@@ -388,20 +389,15 @@ const smartItineraryGeneration = async ({
       console.log(`🎯 Prioritizing by shortest distances first (nearby preference - targeting ≤10km experiences)`);
       
     } else if (travel_distance === 'moderate') {
-      // Moderate: Balanced mix - slight preference for closer, but includes variety
       sortedExperiences.sort((a, b) => {
         const aDistance = parseFloat(a.distance_from_city_center) || 0;
         const bDistance = parseFloat(b.distance_from_city_center) || 0;
-        
-        // Add some randomness to the sorting for variety while maintaining slight preference for closer
-        const randomFactor = (Math.random() - 0.5) * 3; // ±1.5km random factor
+        const randomFactor = (Math.random() - 0.5) * 3;
         return (aDistance - bDistance) + randomFactor;
       });
       console.log(`⚖️ Prioritizing with balanced mix (moderate preference - targeting ≤20km with variety)`);
       
     } else if (travel_distance === 'far') {
-      // Far: Prioritize variety and exploration - mix of all distances
-      // Shuffle experiences but with slight preference for different distance ranges
       const nearbyExps = sortedExperiences.filter(exp => (parseFloat(exp.distance_from_city_center) || 0) <= 10);
       const moderateExps = sortedExperiences.filter(exp => {
         const dist = parseFloat(exp.distance_from_city_center) || 0;
@@ -410,7 +406,6 @@ const smartItineraryGeneration = async ({
       const farExps = sortedExperiences.filter(exp => (parseFloat(exp.distance_from_city_center) || 0) > 20);
       const nullExps = sortedExperiences.filter(exp => !exp.distance_from_city_center);
       
-      // Mix them with some variety but ensure far experiences get priority
       sortedExperiences = [
         ...farExps.sort(() => Math.random() - 0.5),
         ...moderateExps.sort(() => Math.random() - 0.5),
@@ -419,54 +414,60 @@ const smartItineraryGeneration = async ({
       ];
       
       console.log(`🌍 Prioritizing with full variety and exploration (far preference - all distances included)`);
-      console.log(`📊 Distance distribution: ${nearbyExps.length} nearby, ${moderateExps.length} moderate, ${farExps.length} far, ${nullExps.length} unknown`);
-      
     } else {
-      // Default: Random shuffle for any other values
       sortedExperiences = sortedExperiences.sort(() => Math.random() - 0.5);
       console.log(`🎲 Using random shuffle (default behavior)`);
     }
     
-    // Log distance info for selected experiences
-    if (sortedExperiences.length > 0) {
-      const topExperiences = sortedExperiences.slice(0, experiencesPerDay);
-      const distances = topExperiences.map(exp => {
-        const dist = exp.distance_from_city_center;
-        return dist ? `${dist}km` : 'Unknown';
-      });
-      console.log(`🎯 Top ${experiencesPerDay} experiences for day ${day} distances: [${distances.join(', ')}]`);
+    // Schedule experiences with conflict detection
+    let scheduledCount = 0;
+    let attemptCount = 0;
+    const maxAttempts = sortedExperiences.length;
+    
+    while (scheduledCount < experiencesPerDay && attemptCount < maxAttempts) {
+      const experience = sortedExperiences[attemptCount];
+      
+      if (!experience) {
+        break;
+      }
+      
+      // Find a non-conflicting time slot for this experience
+      const nonConflictingSlot = findNonConflictingSlot(
+        experience.availableTimeSlots, 
+        scheduledSlotsForDay
+      );
+      
+      if (nonConflictingSlot) {
+        // Create detailed auto_note including travel distance context
+        const distanceInfo = experience.distance_from_city_center 
+          ? `${experience.distance_from_city_center}km from center`
+          : 'distance unknown';
+        
+        const autoNote = `${experience.title} - ${dayOfWeek} at ${nonConflictingSlot.start_time}`;
+        
+        // Add to itinerary
+        const itineraryItem = {
+          experience_id: experience.experience_id,
+          day_number: day,
+          start_time: nonConflictingSlot.start_time,
+          end_time: nonConflictingSlot.end_time,
+          auto_note: autoNote
+        };
+        
+        itinerary.push(itineraryItem);
+        scheduledSlotsForDay.push(nonConflictingSlot);
+        scheduledCount++;
+        
+        console.log(`➕ Added: ${experience.title} (${distanceInfo}) on day ${day} from ${nonConflictingSlot.start_time} to ${nonConflictingSlot.end_time}`);
+      } else {
+        console.log(`⚠️ Skipping ${experience.title} - no non-conflicting time slot available`);
+      }
+      
+      attemptCount++;
     }
     
-    // Select experiences for this day
-    const selectedExperiences = sortedExperiences.slice(0, experiencesPerDay);
-    
-    // Schedule experiences with their actual time slots
-    selectedExperiences.forEach((experience, index) => {
-      // Select a random available time slot for this experience
-      const randomTimeSlot = experience.availableTimeSlots[
-        Math.floor(Math.random() * experience.availableTimeSlots.length)
-      ];
-      
-      // Create more detailed auto_note including travel distance context
-      const distanceInfo = experience.distance_from_city_center 
-        ? `${experience.distance_from_city_center}km from center`
-        : 'distance unknown';
-      
-      let autoNote = `${experience.title} - ${dayOfWeek} at ${randomTimeSlot.start_time} (${distanceInfo})`;
-      
-      itinerary.push({
-        experience_id: experience.experience_id,
-        day_number: day,
-        start_time: randomTimeSlot.start_time,
-        end_time: randomTimeSlot.end_time,
-        auto_note: autoNote
-      });
-      
-      console.log(`➕ Added: ${experience.title} (${distanceInfo}) on day ${day}`);
-    });
-    
-    if (selectedExperiences.length < experiencesPerDay) {
-      console.log(`⚠️ Warning: Only found ${selectedExperiences.length}/${experiencesPerDay} experiences for day ${day}`);
+    if (scheduledCount < experiencesPerDay) {
+      console.log(`⚠️ Warning: Only scheduled ${scheduledCount}/${experiencesPerDay} experiences for day ${day} due to time conflicts`);
     }
   }
   
@@ -478,30 +479,12 @@ const smartItineraryGeneration = async ({
     return a.start_time.localeCompare(b.start_time);
   });
   
-  console.log(`🎉 Generated itinerary with inclusive ${travel_distance} travel distance preference: ${itinerary.length} experiences total`);
-  
-  // Final summary of distance distribution in the itinerary
-  const itineraryDistances = itinerary.map(item => {
-    const exp = experiences.find(e => e.experience_id === item.experience_id);
-    return exp ? exp.distance_from_city_center : null;
-  }).filter(d => d !== null);
-  
-  if (itineraryDistances.length > 0) {
-    const minDist = Math.min(...itineraryDistances);
-    const maxDist = Math.max(...itineraryDistances);
-    const avgDist = (itineraryDistances.reduce((a, b) => a + b, 0) / itineraryDistances.length).toFixed(1);
-    
-    console.log(`📊 Final itinerary distance stats: ${minDist}km - ${maxDist}km (avg: ${avgDist}km)`);
-  }
+  console.log(`🎉 Generated conflict-free itinerary with inclusive ${travel_distance} travel distance preference: ${itinerary.length} experiences total`);
   
   return itinerary;
 };
 
 // Corrected filtering function that properly joins with availability tables
-
-// Import the city centers at the top of your file
-const { CITY_CENTERS, calculateDistanceFromCityCenter } = require('../utils/cityUtils');
-
 const getFilteredExperiences = async ({
   city,
   experience_types,
@@ -845,92 +828,6 @@ const getFilteredExperiences = async ({
   }
 };
 
-// Alternative: Get experiences with all their time slots pre-loaded
-const getExperiencesWithTimeSlots = async (experienceIds, tripDayNames) => {
-  try {
-    if (experienceIds.length === 0) return [];
-
-    const [results] = await db.query(`
-      SELECT 
-        e.experience_id,
-        e.title,
-        ea.day_of_week,
-        ats.start_time,
-        ats.end_time,
-        ats.availability_id
-      FROM experience e
-      JOIN experience_availability ea ON e.experience_id = ea.experience_id
-      JOIN availability_time_slots ats ON ea.availability_id = ats.availability_id
-      WHERE e.experience_id IN (${experienceIds.map(() => '?').join(',')})
-      ${tripDayNames.length > 0 ? `AND ea.day_of_week IN (${tripDayNames.map(() => '?').join(',')})` : ''}
-      ORDER BY e.experience_id, ea.day_of_week, ats.start_time
-    `, [...experienceIds, ...tripDayNames]);
-
-    // Group by experience_id
-    const experienceTimeSlots = {};
-    results.forEach(row => {
-      if (!experienceTimeSlots[row.experience_id]) {
-        experienceTimeSlots[row.experience_id] = {
-          experience_id: row.experience_id,
-          title: row.title,
-          timeSlots: []
-        };
-      }
-      experienceTimeSlots[row.experience_id].timeSlots.push({
-        day_of_week: row.day_of_week,
-        start_time: row.start_time,
-        end_time: row.end_time
-      });
-    });
-
-    return Object.values(experienceTimeSlots);
-
-  } catch (error) {
-    console.error('Error getting experiences with time slots:', error);
-    return [];
-  }
-};  
-
-
-// Generate appropriate time slots for experiences - UNCHANGED
-const generateTimeSlot = (experience, explore_time, slotIndex) => {
-  const timeSlots = {
-    'Daytime': [
-      { start: '08:00', end: '09:30' },
-      { start: '10:00', end: '11:30' },
-      { start: '12:00', end: '13:30' },
-      { start: '14:00', end: '15:30' },
-      { start: '16:00', end: '17:30' },
-      { start: '18:00', end: '19:00' }
-    ],
-    'Nighttime': [
-      { start: '18:00', end: '19:30' },
-      { start: '20:00', end: '21:30' },
-      { start: '22:00', end: '23:30' },
-      { start: '19:30', end: '21:00' },
-      { start: '21:30', end: '23:00' },
-      { start: '23:30', end: '01:00' }
-    ],
-    'Both': [
-      { start: '09:00', end: '10:30' },
-      { start: '11:00', end: '12:30' },
-      { start: '14:00', end: '15:30' },
-      { start: '16:00', end: '17:30' },
-      { start: '18:00', end: '19:30' },
-      { start: '20:00', end: '21:30' },
-      { start: '22:00', end: '23:00' },
-      { start: '12:30', end: '14:00' }
-    ]
-  };
-
-  const slots = timeSlots[explore_time] || timeSlots['Both'];
-  const selectedSlot = slots[slotIndex % slots.length];
-
-  return {
-    start_time: selectedSlot.start,
-    end_time: selectedSlot.end
-  };
-};
 // Get full itinerary details for response - UNCHANGED
 const getItineraryWithDetails = async (itinerary_id) => {
   try {

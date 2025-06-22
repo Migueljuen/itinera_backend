@@ -9,6 +9,7 @@ router.post('/save', generateItineraryController.saveItinerary);
 
 // Route to get all itineraries for a specific traveler
 router.get('/traveler/:traveler_id', itineraryController.getItineraryByTraveler);
+// Add this to your routes file for testing
 router.get('/:itinerary_id', itineraryController.getItineraryById);
 
 

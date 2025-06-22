@@ -204,8 +204,43 @@ const createItinerary = async (req, res) => {
 };
 
 
+const updateItineraryStatuses = async () => {
+  try {
+    const currentDate = dayjs().format('YYYY-MM-DD');
+    
+    console.log(`🕒 Updating itinerary statuses for date: ${currentDate}`);
+    
+    // Update to 'ongoing' - itineraries that have started but not ended
+    const [ongoingResult] = await db.query(`
+      UPDATE itinerary 
+      SET status = 'ongoing' 
+      WHERE start_date <= ? 
+        AND end_date >= ? 
+        AND status = 'upcoming'
+    `, [currentDate, currentDate]);
+    
+    // Update to 'completed' - itineraries that have ended
+    const [completedResult] = await db.query(`
+      UPDATE itinerary 
+      SET status = 'completed' 
+      WHERE end_date < ? 
+        AND status IN ('upcoming', 'ongoing')
+    `, [currentDate]);
+    
+    console.log(`✅ Status update complete: ${ongoingResult.affectedRows} ongoing, ${completedResult.affectedRows} completed`);
+    
+    return {
+      ongoingUpdated: ongoingResult.affectedRows,
+      completedUpdated: completedResult.affectedRows
+    };
+    
+  } catch (error) {
+    console.error('❌ Error updating itinerary statuses:', error);
+    throw error;
+  }
+};
 
-
+// Your enhanced function with status updates
 const getItineraryByTraveler = async (req, res) => {
   const { traveler_id } = req.params;
 
@@ -214,19 +249,30 @@ const getItineraryByTraveler = async (req, res) => {
   }
 
   try {
-    const [itineraries] = await db.query(
-      'SELECT * FROM itinerary WHERE traveler_id = ?',
-      [traveler_id]
-    );
+    // 🆕 STEP 1: Update statuses first (this is the key addition!)
+    await updateItineraryStatuses();
+
+    // STEP 2: Fetch itineraries with updated statuses and improved ordering
+    const [itineraries] = await db.query(`
+      SELECT * FROM itinerary 
+      WHERE traveler_id = ? 
+      ORDER BY 
+        CASE 
+          WHEN status = 'ongoing' THEN 1
+          WHEN status = 'upcoming' THEN 2
+          WHEN status = 'completed' THEN 3
+        END,
+        start_date ASC
+    `, [traveler_id]);
 
     if (itineraries.length === 0) {
       return res.status(404).json({ message: 'No itinerary found for this traveler' });
     }
 
-    // Fetch items for each itinerary
+    // STEP 3: Fetch items for each itinerary (your existing logic, kept intact)
     const detailedItineraries = await Promise.all(
       itineraries.map(async (itinerary) => {
-        // Format the dates
+        // Format the dates (your existing logic)
         const formattedItinerary = {
           ...itinerary,
           start_date: dayjs(itinerary.start_date).format('YYYY-MM-DD'),
@@ -234,7 +280,7 @@ const getItineraryByTraveler = async (req, res) => {
           created_at: dayjs(itinerary.created_at).format('YYYY-MM-DD HH:mm:ss')
         };
 
-        // Get items for the current itinerary with experience details and destination
+        // Get items for the current itinerary with experience details and destination (your existing logic)
         const [items] = await db.query(
           `SELECT 
              ii.item_id,
@@ -247,6 +293,8 @@ const getItineraryByTraveler = async (req, res) => {
              ii.updated_at,
              e.title AS experience_name, 
              e.description AS experience_description,
+             e.price,
+             e.unit,
              d.name AS destination_name,
              d.city AS destination_city
            FROM itinerary_items ii
@@ -257,7 +305,7 @@ const getItineraryByTraveler = async (req, res) => {
           [itinerary.itinerary_id]
         );
 
-        // Fetch images for each experience in the items
+        // Fetch images for each experience in the items (your existing logic, kept intact)
         const itemsWithImages = await Promise.all(
           items.map(async (item) => {
             if (item.experience_id) {
@@ -268,7 +316,7 @@ const getItineraryByTraveler = async (req, res) => {
                   [item.experience_id]
                 );
                 
-                // Convert file system paths to URLs
+                // Convert file system paths to URLs (your existing logic)
                 const images = imageRows.map(img => {
                   // Extract just the filename from the absolute path
                   const filename = path.basename(img.image_url);
@@ -307,12 +355,18 @@ const getItineraryByTraveler = async (req, res) => {
       })
     );
 
-    res.status(200).json({ itineraries: detailedItineraries });
+    // 🆕 STEP 4: Enhanced response with status update info
+    res.status(200).json({ 
+      message: 'Itineraries retrieved successfully',
+      itineraries: detailedItineraries 
+    });
+
   } catch (err) {
     console.error('Error in getItineraryByTraveler:', err);
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
+
 
 const getItineraryById = async (req, res) => {
   const { itinerary_id } = req.params;
@@ -502,6 +556,7 @@ const deleteItinerary = async (req, res) => {
 module.exports = {
   createItinerary,
   getItineraryByTraveler,
+  updateItineraryStatuses,
   getItineraryById,
   getItineraryItems,
   updateItinerary,
