@@ -1022,38 +1022,531 @@ const getExperienceByUserID = async (req, res) => {
 };
 
 const updateExperience = async (req, res) => {
+  const { experience_id } = req.params;
+  const { 
+    // Experience data
+    title, description, price, unit, status, travel_companion,
+    
+    // Destination data (for creating new or switching)
+    destination_name, city, destination_description, latitude, longitude,
+    destination_id,
+    
+    // Arrays
+    availability, tags,
+    
+    // Images to delete
+    images_to_delete
+  } = req.body;
+
+  // Get uploaded files if any
+  const files = req.files;
+
+  // Begin transaction
+  const connection = await db.getConnection();
+  await connection.beginTransaction();
+
   try {
-    const experienceId = req.params.id;
-    const files = req.files;
+    // Check if experience exists and get current data
+    const [existingExperience] = await connection.query(
+      'SELECT * FROM experience WHERE experience_id = ?',
+      [experience_id]
+    );
 
-    // Update other experience fields first...
-
-    // Save uploaded image URLs to DB with web-accessible paths
-    if (files && files.length > 0) {
-      // Convert file paths to web URLs
-      const values = files.map(file => {
-        // Extract just the filename from the full path
-        const filename = file.path.split('\\').pop().split('/').pop();
-        
-        // Create web-accessible path
-        const webPath = `/uploads/experiences/${filename}`;
-        
-        return [experienceId, webPath];
-      });
-
-      console.log('Web paths to be saved:', values);
-      
-      const query = 'INSERT INTO experience_images (experience_id, image_url) VALUES ?';
-      await db.query(query, [values]);
+    if (existingExperience.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: 'Experience not found' });
     }
 
-    console.log('Files processed:', files ? files.length : 0);
+    const currentExperience = existingExperience[0];
 
-    res.status(200).json({ message: 'Experience updated successfully with images' });
-  } catch (error) {
-    console.error('Error updating experience:', error);
-    res.status(500).json({ message: 'Failed to update experience' });
+    // Check if user has permission to update (must be the creator)
+    if (req.user && req.user.user_id !== currentExperience.creator_id) {
+      await connection.rollback();
+      return res.status(403).json({ message: 'You do not have permission to update this experience' });
+    }
+
+    // Build dynamic update query for experience table
+    const updateFields = [];
+    const updateValues = [];
+
+    if (title !== undefined) {
+      updateFields.push('title = ?');
+      updateValues.push(title);
+    }
+
+    if (description !== undefined) {
+      updateFields.push('description = ?');
+      updateValues.push(description);
+    }
+
+    if (price !== undefined) {
+      updateFields.push('price = ?');
+      updateValues.push(price);
+    }
+
+    if (unit !== undefined) {
+      // Validate unit
+      const validUnits = ['Entry', 'Hour', 'Day', 'Package'];
+      if (!validUnits.includes(unit)) {
+        await connection.rollback();
+        return res.status(400).json({ message: 'Invalid unit type' });
+      }
+      updateFields.push('unit = ?');
+      updateValues.push(unit);
+    }
+
+    if (status !== undefined) {
+      // Validate status
+      const validStatuses = ['draft', 'inactive', 'active'];
+      if (!validStatuses.includes(status)) {
+        await connection.rollback();
+        return res.status(400).json({ message: 'Invalid status value' });
+      }
+      updateFields.push('status = ?');
+      updateValues.push(status);
+    }
+
+    if (travel_companion !== undefined) {
+      updateFields.push('travel_companion = ?');
+      updateValues.push(travel_companion);
+    }
+
+    // Handle destination update
+    if (destination_id !== undefined || (destination_name && city && destination_description && latitude && longitude)) {
+      let finalDestinationId;
+
+      if (destination_id) {
+        // Use existing destination
+        const [destinationCheck] = await connection.query(
+          'SELECT destination_id FROM destination WHERE destination_id = ?',
+          [destination_id]
+        );
+        if (destinationCheck.length === 0) {
+          await connection.rollback();
+          return res.status(404).json({ message: 'Specified destination does not exist' });
+        }
+        finalDestinationId = destination_id;
+      } else if (destination_name && city && destination_description && latitude && longitude) {
+        // Create new destination or use existing
+        const [existingDestination] = await connection.query(
+          'SELECT destination_id FROM destination WHERE name = ? AND city = ?', 
+          [destination_name, city]
+        );
+        
+        if (existingDestination.length > 0) {
+          finalDestinationId = existingDestination[0].destination_id;
+        } else {
+          // Calculate distance from city center (assuming you have CITY_CENTERS and calculateDistanceFromCityCenter)
+          let distanceFromCenter = null;
+          
+          if (typeof CITY_CENTERS !== 'undefined' && CITY_CENTERS[city]) {
+            const cityCenter = CITY_CENTERS[city];
+            distanceFromCenter = calculateDistanceFromCityCenter(
+              parseFloat(latitude),
+              parseFloat(longitude),
+              cityCenter.lat,
+              cityCenter.lng
+            );
+            distanceFromCenter = Math.round(distanceFromCenter * 100) / 100;
+          }
+
+          const [newDestination] = await connection.query(
+            'INSERT INTO destination (name, city, description, latitude, longitude, distance_from_city_center) VALUES (?, ?, ?, ?, ?, ?)',
+            [destination_name, city, destination_description, latitude, longitude, distanceFromCenter]
+          );
+          
+          finalDestinationId = newDestination.insertId;
+        }
+      }
+
+      if (finalDestinationId) {
+        updateFields.push('destination_id = ?');
+        updateValues.push(finalDestinationId);
+      }
+    }
+
+    // Update experience if there are fields to update
+    if (updateFields.length > 0) {
+      updateValues.push(experience_id);
+      await connection.query(
+        `UPDATE experience SET ${updateFields.join(', ')} WHERE experience_id = ?`,
+        updateValues
+      );
+    }
+
+    // Handle availability update
+    if (availability !== undefined) {
+      let parsedAvailability;
+      try {
+        parsedAvailability = typeof availability === 'string' ? JSON.parse(availability) : availability;
+      } catch (e) {
+        await connection.rollback();
+        return res.status(400).json({ message: 'Invalid availability format' });
+      }
+
+      if (Array.isArray(parsedAvailability) && parsedAvailability.length > 0) {
+        // Delete existing availability and time slots
+        const [existingAvailability] = await connection.query(
+          'SELECT availability_id FROM experience_availability WHERE experience_id = ?',
+          [experience_id]
+        );
+
+        for (const avail of existingAvailability) {
+          await connection.query(
+            'DELETE FROM availability_time_slots WHERE availability_id = ?',
+            [avail.availability_id]
+          );
+        }
+
+        await connection.query(
+          'DELETE FROM experience_availability WHERE experience_id = ?',
+          [experience_id]
+        );
+
+        // Insert new availability
+        const validDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+        for (const dayAvailability of parsedAvailability) {
+          const { day_of_week, time_slots } = dayAvailability;
+
+          if (!validDays.includes(day_of_week) || !Array.isArray(time_slots) || time_slots.length === 0) {
+            await connection.rollback();
+            return res.status(400).json({ message: 'Each availability entry must have a valid day and time_slots array' });
+          }
+
+          const [availabilityResult] = await connection.execute(
+            `INSERT INTO experience_availability (experience_id, day_of_week) VALUES (?, ?)`,
+            [experience_id, day_of_week]
+          );
+          const availability_id = availabilityResult.insertId;
+
+          for (const slot of time_slots) {
+            const { start_time, end_time } = slot;
+
+            if (!start_time || !end_time) {
+              await connection.rollback();
+              return res.status(400).json({ message: 'Each time slot must have a start_time and end_time' });
+            }
+
+            await connection.execute(
+              `INSERT INTO availability_time_slots (availability_id, start_time, end_time) VALUES (?, ?, ?)`,
+              [availability_id, start_time, end_time]
+            );
+          }
+        }
+      }
+    }
+
+    // Handle tags update
+    if (tags !== undefined) {
+      let parsedTags;
+      try {
+        parsedTags = typeof tags === 'string' ? JSON.parse(tags) : tags;
+      } catch (e) {
+        await connection.rollback();
+        return res.status(400).json({ message: 'Invalid tags format' });
+      }
+
+      if (Array.isArray(parsedTags) && parsedTags.length > 0) {
+        // Verify all tag IDs exist
+        const [existingTags] = await connection.query(
+          'SELECT tag_id FROM tags WHERE tag_id IN (?)',
+          [parsedTags]
+        );
+        
+        if (existingTags.length !== parsedTags.length) {
+          await connection.rollback();
+          return res.status(400).json({ message: 'One or more tag IDs do not exist' });
+        }
+
+        // Delete existing tags
+        await connection.query(
+          'DELETE FROM experience_tags WHERE experience_id = ?',
+          [experience_id]
+        );
+
+        // Insert new tags
+        const tagValues = parsedTags.map(tag_id => [experience_id, tag_id]);
+        await connection.query(
+          `INSERT INTO experience_tags (experience_id, tag_id) VALUES ?`,
+          [tagValues]
+        );
+      }
+    }
+
+    // Handle image deletions
+    if (images_to_delete && Array.isArray(images_to_delete) && images_to_delete.length > 0) {
+      // Delete from database
+      await connection.query(
+        'DELETE FROM experience_images WHERE experience_id = ? AND image_id IN (?)',
+        [experience_id, images_to_delete]
+      );
+
+      // You might want to also delete physical files here
+      // This would require getting the file paths first and using fs.unlink
+    }
+
+    // Handle new image uploads
+    if (files && files.length > 0) {
+      const imageValues = files.map(file => {
+        const filename = file.path.split('\\').pop().split('/').pop();
+        const webPath = `uploads/experiences/${filename}`;
+        return [experience_id, webPath];
+      });
+
+      await connection.query(
+        'INSERT INTO experience_images (experience_id, image_url) VALUES ?',
+        [imageValues]
+      );
+    }
+
+    // Commit transaction
+    await connection.commit();
+    connection.release();
+
+    // Fetch updated data to return
+    const [updatedExperience] = await db.query(
+      'SELECT * FROM experience WHERE experience_id = ?',
+      [experience_id]
+    );
+
+    // Fetch destination info
+    const [destinationInfo] = await db.query(
+      'SELECT * FROM destination WHERE destination_id = ?',
+      [updatedExperience[0].destination_id]
+    );
+    
+    // Fetch availability
+    const [availabilityRecords] = await db.query(
+      'SELECT * FROM experience_availability WHERE experience_id = ?',
+      [experience_id]
+    );
+    
+    const processedAvailability = [];
+    for (const avail of availabilityRecords) {
+      const [timeSlots] = await db.query(
+        'SELECT * FROM availability_time_slots WHERE availability_id = ?',
+        [avail.availability_id]
+      );
+      
+      processedAvailability.push({
+        ...avail,
+        time_slots: timeSlots
+      });
+    }
+
+    // Fetch tags
+    const [tagRecords] = await db.query(
+      'SELECT t.tag_id, t.name FROM tags t JOIN experience_tags et ON t.tag_id = et.tag_id WHERE et.experience_id = ?',
+      [experience_id]
+    );
+
+    // Fetch images
+    const [imageRecords] = await db.query(
+      'SELECT * FROM experience_images WHERE experience_id = ?',
+      [experience_id]
+    );
+
+    res.status(200).json({ 
+      message: 'Experience updated successfully',
+      experience: updatedExperience[0],
+      destination: destinationInfo[0],
+      availability: processedAvailability,
+      tags: tagRecords,
+      images: imageRecords || []
+    });
+
+  } catch (err) {
+    await connection.rollback();
+    connection.release();
+    console.error(err);
+    res.status(500).json({ error: 'Server error', details: err.message });
   }
+};
+
+// Helper function for partial updates (updating specific sections)
+// const updateExperienceSection = async (req, res) => {
+//   const { experience_id } = req.params;
+//   const { section } = req.body; // 'basic', 'availability', 'tags', 'destination', 'images'
+
+//   // This function can handle section-specific updates
+//   // You can call the main updateExperience function with only the relevant fields
+  
+//   const allowedSections = ['basic', 'availability', 'tags', 'destination', 'images'];
+//   if (!allowedSections.includes(section)) {
+//     return res.status(400).json({ message: 'Invalid section specified' });
+//   }
+
+//   // Filter the request body to only include fields relevant to the section
+//   let filteredBody = { ...req.body };
+  
+//   switch (section) {
+//     case 'basic':
+//       filteredBody = {
+//         title: req.body.title,
+//         description: req.body.description,
+//         price: req.body.price,
+//         unit: req.body.unit,
+//         status: req.body.status,
+//         travel_companion: req.body.travel_companion
+//       };
+//       break;
+//     case 'availability':
+//       filteredBody = { availability: req.body.availability };
+//       break;
+//     case 'tags':
+//       filteredBody = { tags: req.body.tags };
+//       break;
+//     case 'destination':
+//       filteredBody = {
+//         destination_id: req.body.destination_id,
+//         destination_name: req.body.destination_name,
+//         city: req.body.city,
+//         destination_description: req.body.destination_description,
+//         latitude: req.body.latitude,
+//         longitude: req.body.longitude
+//       };
+//       break;
+//     case 'images':
+//       filteredBody = { images_to_delete: req.body.images_to_delete };
+//       break;
+//   }
+
+//   // Clean undefined values
+//   Object.keys(filteredBody).forEach(key => {
+//     if (filteredBody[key] === undefined) {
+//       delete filteredBody[key];
+//     }
+//   });
+
+//   req.body = filteredBody;
+//   return updateExperience(req, res);
+// };
+
+const updateExperienceSection = async (req, res) => {
+  const { experience_id } = req.params;
+  const { section } = req.body; // 'basic', 'availability', 'tags', 'destination', 'images'
+
+  // This function can handle section-specific updates
+  // You can call the main updateExperience function with only the relevant fields
+  
+  const allowedSections = ['basic', 'availability', 'tags', 'destination', 'images'];
+  if (!allowedSections.includes(section)) {
+    return res.status(400).json({ message: 'Invalid section specified' });
+  }
+
+  // Filter the request body to only include fields relevant to the section
+  let filteredBody = { ...req.body };
+  
+  switch (section) {
+    case 'basic':
+      filteredBody = {
+        title: req.body.title,
+        description: req.body.description,
+        price: req.body.price,
+        unit: req.body.unit,
+        status: req.body.status,
+        travel_companion: req.body.travel_companion
+      };
+      break;
+    case 'availability':
+      filteredBody = { availability: req.body.availability };
+      break;
+    case 'tags':
+      filteredBody = { 
+        tags: req.body.tags,
+        travel_companion: req.body.travel_companion 
+      };
+      break;
+    case 'destination':
+      filteredBody = {
+        destination_id: req.body.destination_id,
+        destination_name: req.body.destination_name,
+        city: req.body.city,
+        destination_description: req.body.destination_description,
+        latitude: req.body.latitude,
+        longitude: req.body.longitude
+      };
+      break;
+    case 'images':
+      // Special handling for images section
+      // Parse images_to_delete if it's a string
+      let imagesToDelete = req.body.images_to_delete;
+      if (typeof imagesToDelete === 'string') {
+        try {
+          imagesToDelete = JSON.parse(imagesToDelete);
+        } catch (e) {
+          imagesToDelete = [];
+        }
+      }
+
+      // For images section, we need to handle deletions separately
+      // before passing to the main update function
+      if (imagesToDelete && Array.isArray(imagesToDelete) && imagesToDelete.length > 0) {
+        const connection = await db.getConnection();
+        try {
+          await connection.beginTransaction();
+
+          // Get the actual image records from database to verify they belong to this experience
+          const [existingImages] = await connection.query(
+            'SELECT image_id, image_url FROM experience_images WHERE experience_id = ? AND image_url IN (?)',
+            [experience_id, imagesToDelete]
+          );
+
+          if (existingImages.length > 0) {
+            // Delete from database
+            const imageIds = existingImages.map(img => img.image_id);
+            await connection.query(
+              'DELETE FROM experience_images WHERE image_id IN (?)',
+              [imageIds]
+            );
+
+            // Delete physical files
+            for (const image of existingImages) {
+              try {
+                // Construct the full file path
+                const filePath = path.join(__dirname, '..', '..', 'public', image.image_url);
+                await fs.unlink(filePath);
+                console.log(`Deleted file: ${filePath}`);
+              } catch (fileErr) {
+                console.error(`Error deleting file ${image.image_url}:`, fileErr);
+                // Continue even if file deletion fails
+              }
+            }
+          }
+
+          await connection.commit();
+        } catch (err) {
+          await connection.rollback();
+          console.error('Error deleting images:', err);
+          return res.status(500).json({ 
+            message: 'Failed to delete images', 
+            error: err.message 
+          });
+        } finally {
+          connection.release();
+        }
+      }
+
+      // Set filteredBody for any new images that need to be uploaded
+      filteredBody = { 
+        // Don't include images_to_delete in the main update
+        // as we've already handled deletions above
+      };
+      
+      // The req.files will be handled by the main updateExperience function
+      break;
+  }
+
+  // Clean undefined values
+  Object.keys(filteredBody).forEach(key => {
+    if (filteredBody[key] === undefined) {
+      delete filteredBody[key];
+    }
+  });
+
+  req.body = filteredBody;
+  return updateExperience(req, res);
 };
 
 const saveExperience = async (req, res) => {
@@ -1112,4 +1605,4 @@ const getSavedExperiences = async (req, res) => {
 
 
 
-module.exports = { upload, createExperienceHandler: [upload.array('images', 5), createExperience], createExperience, getAllExperience,getExperienceAvailability, getExperienceById, getAvailableTimeSlots, updateExperience, saveExperience, getSavedExperiences, getExperienceByUserID, getActiveExperience };
+module.exports = { upload, createExperienceHandler: [upload.array('images', 5), createExperience], createExperience, getAllExperience,getExperienceAvailability, getExperienceById, getAvailableTimeSlots, updateExperience,updateExperienceSection, saveExperience, getSavedExperiences, getExperienceByUserID, getActiveExperience };
