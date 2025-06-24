@@ -6,6 +6,10 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const dayjs = require('dayjs');
+const util = require('util');
+const unlinkAsync = util.promisify(fs.unlink);
+
+
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -1423,6 +1427,7 @@ const updateExperience = async (req, res) => {
 //   return updateExperience(req, res);
 // };
 
+
 const updateExperienceSection = async (req, res) => {
   const { experience_id } = req.params;
   const { section } = req.body; // 'basic', 'availability', 'tags', 'destination', 'images'
@@ -1472,10 +1477,14 @@ const updateExperienceSection = async (req, res) => {
       // Special handling for images section
       // Parse images_to_delete if it's a string
       let imagesToDelete = req.body.images_to_delete;
+      console.log('Raw images_to_delete:', req.body.images_to_delete);
+      
       if (typeof imagesToDelete === 'string') {
         try {
           imagesToDelete = JSON.parse(imagesToDelete);
+          console.log('Parsed images_to_delete:', imagesToDelete);
         } catch (e) {
+          console.error('Failed to parse images_to_delete:', e);
           imagesToDelete = [];
         }
       }
@@ -1487,11 +1496,30 @@ const updateExperienceSection = async (req, res) => {
         try {
           await connection.beginTransaction();
 
+          // Clean up image URLs to match database format
+          const cleanedImageUrls = imagesToDelete.map(url => {
+            // Remove API_URL prefix if present
+            if (url.startsWith('http://') || url.startsWith('https://')) {
+              const urlParts = url.split('/uploads/');
+              return urlParts.length > 1 ? 'uploads/' + urlParts[1] : url;
+            }
+            // Remove leading slash if present to match database format
+            if (url.startsWith('/uploads/')) {
+              return url.substring(1); // Remove the leading slash
+            }
+            return url;
+          });
+          
+          console.log('Cleaned image URLs:', cleanedImageUrls);
+          console.log('Original URLs from frontend:', imagesToDelete);
+
           // Get the actual image records from database to verify they belong to this experience
           const [existingImages] = await connection.query(
             'SELECT image_id, image_url FROM experience_images WHERE experience_id = ? AND image_url IN (?)',
-            [experience_id, imagesToDelete]
+            [experience_id, cleanedImageUrls]
           );
+          
+          console.log('Found images to delete:', existingImages);
 
           if (existingImages.length > 0) {
             // Delete from database
@@ -1500,22 +1528,26 @@ const updateExperienceSection = async (req, res) => {
               'DELETE FROM experience_images WHERE image_id IN (?)',
               [imageIds]
             );
+            console.log('Deleted image records:', imageIds);
 
             // Delete physical files
             for (const image of existingImages) {
               try {
                 // Construct the full file path
                 const filePath = path.join(__dirname, '..', '..', 'public', image.image_url);
-                await fs.unlink(filePath);
+                await unlinkAsync(filePath);
                 console.log(`Deleted file: ${filePath}`);
               } catch (fileErr) {
                 console.error(`Error deleting file ${image.image_url}:`, fileErr);
                 // Continue even if file deletion fails
               }
             }
+          } else {
+            console.log('No matching images found to delete');
           }
 
           await connection.commit();
+          console.log('Image deletion transaction committed');
         } catch (err) {
           await connection.rollback();
           console.error('Error deleting images:', err);
