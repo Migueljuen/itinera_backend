@@ -696,7 +696,7 @@ const getItineraryById = async (req, res) => {
 
 const getItineraryItemById = async (req, res) => {
   const { item_id } = req.params;
-  const user_id = req.user.user_id; // ✅ This is correct now!
+  const user_id = req.user.user_id;
 
   if (!item_id) {
     return res.status(400).json({ 
@@ -769,7 +769,6 @@ const getItineraryItemById = async (req, res) => {
         d.description AS destination_description,
         d.latitude AS destination_latitude,
         d.longitude AS destination_longitude,
-        d.address AS destination_address,
         
         -- Itinerary context
         i.title AS itinerary_title,
@@ -795,39 +794,39 @@ const getItineraryItemById = async (req, res) => {
 
     const item = itemDetails[0];
 
-    // Fetch images for the experience
+    // Fetch images
     let images = [];
     let primary_image = null;
     
     if (item.experience_id) {
       try {
         const [imageRows] = await db.query(
-          `SELECT image_url, is_primary 
+          `SELECT image_url 
            FROM experience_images 
            WHERE experience_id = ? 
-           ORDER BY is_primary DESC, image_id ASC`,
+           ORDER BY image_id ASC`,
           [item.experience_id]
         );
         
-        // Convert file system paths to URLs (following your existing pattern)
+        // Convert file system paths to URLs
         images = imageRows.map(img => {
           const filename = path.basename(img.image_url);
           return `/uploads/experiences/${filename}`;
         });
 
-        // Set primary image
-        const primaryImageRow = imageRows.find(img => img.is_primary);
-        if (primaryImageRow) {
-          primary_image = `/uploads/experiences/${path.basename(primaryImageRow.image_url)}`;
-        } else if (images.length > 0) {
+        // Use the first image as primary since there's no is_primary column
+        if (images.length > 0) {
           primary_image = images[0];
         }
       } catch (imageError) {
         console.error(`Error fetching images for experience ${item.experience_id}:`, imageError);
+        // Continue without images rather than failing the entire request
+        images = [];
+        primary_image = null;
       }
     }
 
-    // Fetch tags for the experience
+    // Fetch tags
     let tags = [];
     if (item.experience_id) {
       try {
@@ -842,10 +841,10 @@ const getItineraryItemById = async (req, res) => {
         tags = tagRows.map(tag => tag.name);
       } catch (tagError) {
         console.error(`Error fetching tags for experience ${item.experience_id}:`, tagError);
+        tags = [];
       }
     }
 
-    // Format dates using dayjs (following your existing pattern)
     const dayjs = require('dayjs');
     
     // Format the response
@@ -874,15 +873,14 @@ const getItineraryItemById = async (req, res) => {
         tags: tags
       } : null,
       
-      // Destination details - ensure coordinates are numbers
+      // Destination details
       destination: item.destination_id ? {
         id: item.destination_id,
         name: item.destination_name,
         city: item.destination_city,
         description: item.destination_description,
         latitude: parseFloat(item.destination_latitude),
-        longitude: parseFloat(item.destination_longitude),
-        address: item.destination_address
+        longitude: parseFloat(item.destination_longitude)
       } : null,
       
       // Itinerary context
@@ -910,6 +908,7 @@ const getItineraryItemById = async (req, res) => {
     });
   }
 };
+
 
 
 
