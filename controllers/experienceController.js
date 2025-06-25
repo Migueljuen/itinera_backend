@@ -842,65 +842,6 @@ const getAvailableTimeSlots = async (req, res) => {
   }
 };
 
-const getActiveExperience = async (req, res) => {
-  try {
-    // 1. Fetch active experiences with destination info and tags
-    const [experiences] = await db.query(`
-      SELECT 
-        e.experience_id AS id,
-        e.title,
-        e.description,
-        e.price,
-        e.unit,
-        d.name AS destination_name,
-        d.city AS location,
-        GROUP_CONCAT(t.name) AS tags
-      FROM experience e
-      JOIN destination d ON e.destination_id = d.destination_id
-      LEFT JOIN experience_tags et ON e.experience_id = et.experience_id
-      LEFT JOIN tags t ON et.tag_id = t.tag_id
-      WHERE e.status = 'active'
-      GROUP BY e.experience_id
-    `);
-
-    // 2. Fetch all images
-    const [images] = await db.query(`
-      SELECT 
-        experience_id,
-        image_url
-      FROM experience_images
-    `);
-
-    // 3. Map images by experience_id
-    const imageMap = {};
-    images.forEach(img => {
-      if (!imageMap[img.experience_id]) {
-        imageMap[img.experience_id] = [];
-      }
-
-      let webPath = img.image_url;
-      if (webPath.includes(':\\') || webPath.includes('\\')) {
-        const filename = webPath.split('\\').pop();
-        webPath = `uploads/experiences/${filename}`;
-      }
-
-      imageMap[img.experience_id].push(webPath);
-    });
-
-    // 4. Attach tags and images
-    experiences.forEach(exp => {
-      exp.tags = exp.tags ? exp.tags.split(',') : [];
-      exp.images = imageMap[exp.id] || [];
-    });
-
-    // 5. Return the result
-    res.status(200).json(experiences);
-
-  } catch (error) {
-    console.error('Error fetching active experiences:', error);
-    res.status(500).json({ message: 'Failed to fetch active experiences' });
-  }
-};
 
 
 const getExperienceById = async (req, res) => {
@@ -976,6 +917,66 @@ const getExperienceById = async (req, res) => {
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 }
+
+const getActiveExperience = async (req, res) => {
+  try {
+    // 1. Fetch active experiences with destination info and tags
+    const [experiences] = await db.query(`
+      SELECT 
+        e.experience_id AS id,
+        e.title,
+        e.description,
+        e.price,
+        e.unit,
+        d.name AS destination_name,
+        d.city AS location,
+        GROUP_CONCAT(t.name) AS tags
+      FROM experience e
+      JOIN destination d ON e.destination_id = d.destination_id
+      LEFT JOIN experience_tags et ON e.experience_id = et.experience_id
+      LEFT JOIN tags t ON et.tag_id = t.tag_id
+      WHERE e.status = 'active'
+      GROUP BY e.experience_id
+    `);
+
+    // 2. Fetch all images
+    const [images] = await db.query(`
+      SELECT 
+        experience_id,
+        image_url
+      FROM experience_images
+    `);
+
+    // 3. Map images by experience_id
+    const imageMap = {};
+    images.forEach(img => {
+      if (!imageMap[img.experience_id]) {
+        imageMap[img.experience_id] = [];
+      }
+
+      let webPath = img.image_url;
+      if (webPath.includes(':\\') || webPath.includes('\\')) {
+        const filename = webPath.split('\\').pop();
+        webPath = `uploads/experiences/${filename}`;
+      }
+
+      imageMap[img.experience_id].push(webPath);
+    });
+
+    // 4. Attach tags and images
+    experiences.forEach(exp => {
+      exp.tags = exp.tags ? exp.tags.split(',') : [];
+      exp.images = imageMap[exp.id] || [];
+    });
+
+    // 5. Return the result
+    res.status(200).json(experiences);
+
+  } catch (error) {
+    console.error('Error fetching active experiences:', error);
+    res.status(500).json({ message: 'Failed to fetch active experiences' });
+  }
+};
 
 const getExperienceByUserID = async (req, res) => {
   const { user_id } = req.params;

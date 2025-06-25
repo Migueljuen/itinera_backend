@@ -694,6 +694,281 @@ const getItineraryById = async (req, res) => {
   }
 };
 
+const getItineraryItemById = async (req, res) => {
+  const { item_id } = req.params;
+  const user_id = req.user.user_id; // ✅ This is correct now!
+
+  if (!item_id) {
+    return res.status(400).json({ 
+      success: false,
+      message: 'Item ID is required' 
+    });
+  }
+
+  try {
+    // First, verify that the user owns this itinerary item
+    const [ownershipCheck] = await db.query(
+      `SELECT 
+        ii.item_id,
+        i.traveler_id,
+        i.title as itinerary_title,
+        i.start_date as itinerary_start_date,
+        i.end_date as itinerary_end_date,
+        i.status as itinerary_status
+      FROM itinerary_items ii
+      JOIN itinerary i ON ii.itinerary_id = i.itinerary_id
+      WHERE ii.item_id = ? AND i.traveler_id = ?`,
+      [item_id, user_id]
+    );
+
+    if (ownershipCheck.length === 0) {
+      // Check if item exists at all
+      const [itemExists] = await db.query(
+        'SELECT item_id FROM itinerary_items WHERE item_id = ?',
+        [item_id]
+      );
+      
+      if (itemExists.length === 0) {
+        return res.status(404).json({ 
+          success: false,
+          message: 'Item not found' 
+        });
+      }
+      
+      return res.status(403).json({ 
+        success: false,
+        message: 'Access denied. This item does not belong to your itinerary.' 
+      });
+    }
+
+    // Get the full item details with experience and destination
+    const [itemDetails] = await db.query(
+      `SELECT 
+        ii.item_id,
+        ii.itinerary_id,
+        ii.experience_id,
+        ii.day_number,
+        ii.start_time,
+        ii.end_time,
+        ii.custom_note,
+        ii.created_at,
+        ii.updated_at,
+        
+        -- Experience details
+        e.title AS experience_name,
+        e.description AS experience_description,
+        e.price,
+        e.unit,
+        e.creator_id,
+        e.travel_companion,
+        
+        -- Destination details
+        d.destination_id,
+        d.name AS destination_name,
+        d.city AS destination_city,
+        d.description AS destination_description,
+        d.latitude AS destination_latitude,
+        d.longitude AS destination_longitude,
+        d.address AS destination_address,
+        
+        -- Itinerary context
+        i.title AS itinerary_title,
+        i.start_date AS itinerary_start_date,
+        i.end_date AS itinerary_end_date,
+        i.status AS itinerary_status,
+        i.notes AS itinerary_notes
+        
+      FROM itinerary_items ii
+      JOIN itinerary i ON ii.itinerary_id = i.itinerary_id
+      LEFT JOIN experience e ON ii.experience_id = e.experience_id
+      LEFT JOIN destination d ON e.destination_id = d.destination_id
+      WHERE ii.item_id = ?`,
+      [item_id]
+    );
+
+    if (itemDetails.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Item details not found' 
+      });
+    }
+
+    const item = itemDetails[0];
+
+    // Fetch images for the experience
+    let images = [];
+    let primary_image = null;
+    
+    if (item.experience_id) {
+      try {
+        const [imageRows] = await db.query(
+          `SELECT image_url, is_primary 
+           FROM experience_images 
+           WHERE experience_id = ? 
+           ORDER BY is_primary DESC, image_id ASC`,
+          [item.experience_id]
+        );
+        
+        // Convert file system paths to URLs (following your existing pattern)
+        images = imageRows.map(img => {
+          const filename = path.basename(img.image_url);
+          return `/uploads/experiences/${filename}`;
+        });
+
+        // Set primary image
+        const primaryImageRow = imageRows.find(img => img.is_primary);
+        if (primaryImageRow) {
+          primary_image = `/uploads/experiences/${path.basename(primaryImageRow.image_url)}`;
+        } else if (images.length > 0) {
+          primary_image = images[0];
+        }
+      } catch (imageError) {
+        console.error(`Error fetching images for experience ${item.experience_id}:`, imageError);
+      }
+    }
+
+    // Fetch tags for the experience
+    let tags = [];
+    if (item.experience_id) {
+      try {
+        const [tagRows] = await db.query(
+          `SELECT t.name
+           FROM experience_tags et
+           JOIN tags t ON et.tag_id = t.tag_id
+           WHERE et.experience_id = ?`,
+          [item.experience_id]
+        );
+        
+        tags = tagRows.map(tag => tag.name);
+      } catch (tagError) {
+        console.error(`Error fetching tags for experience ${item.experience_id}:`, tagError);
+      }
+    }
+
+    // Format dates using dayjs (following your existing pattern)
+    const dayjs = require('dayjs');
+    
+    // Format the response
+    const formattedItem = {
+      // Item details
+      item_id: item.item_id,
+      itinerary_id: item.itinerary_id,
+      day_number: item.day_number,
+      start_time: item.start_time,
+      end_time: item.end_time,
+      custom_note: item.custom_note,
+      created_at: dayjs(item.created_at).format('YYYY-MM-DD HH:mm:ss'),
+      updated_at: dayjs(item.updated_at).format('YYYY-MM-DD HH:mm:ss'),
+      
+      // Experience details
+      experience: item.experience_id ? {
+        id: item.experience_id,
+        name: item.experience_name,
+        description: item.experience_description,
+        price: item.price,
+        unit: item.unit,
+        creator_id: item.creator_id,
+        travel_companion: item.travel_companion,
+        images: images,
+        primary_image: primary_image,
+        tags: tags
+      } : null,
+      
+      // Destination details - ensure coordinates are numbers
+      destination: item.destination_id ? {
+        id: item.destination_id,
+        name: item.destination_name,
+        city: item.destination_city,
+        description: item.destination_description,
+        latitude: parseFloat(item.destination_latitude),
+        longitude: parseFloat(item.destination_longitude),
+        address: item.destination_address
+      } : null,
+      
+      // Itinerary context
+      itinerary: {
+        id: item.itinerary_id,
+        title: item.itinerary_title,
+        start_date: dayjs(item.itinerary_start_date).format('YYYY-MM-DD'),
+        end_date: dayjs(item.itinerary_end_date).format('YYYY-MM-DD'),
+        status: item.itinerary_status,
+        notes: item.itinerary_notes
+      }
+    };
+
+    res.status(200).json({
+      success: true,
+      data: formattedItem
+    });
+
+  } catch (err) {
+    console.error('Error in getItineraryItemById:', err);
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error', 
+      message: err.message 
+    });
+  }
+};
+
+
+
+// Optional: Bulk fetch multiple items (useful for optimization)
+const getItineraryItemsByIds = async (req, res) => {
+  const { item_ids } = req.body; // Array of item IDs
+  const user_id = req.user.user_id;
+
+  if (!item_ids || !Array.isArray(item_ids) || item_ids.length === 0) {
+    return res.status(400).json({ message: 'Item IDs array is required' });
+  }
+
+  try {
+    // Create placeholders for SQL query
+    const placeholders = item_ids.map(() => '?').join(',');
+    
+    // Verify ownership for all items
+    const [items] = await db.query(
+      `SELECT 
+        ii.item_id,
+        ii.itinerary_id,
+        ii.experience_id,
+        ii.day_number,
+        ii.start_time,
+        ii.end_time,
+        ii.custom_note,
+        e.title AS experience_name,
+        e.price,
+        e.unit,
+        d.name AS destination_name,
+        d.city AS destination_city,
+        CAST(d.latitude AS DECIMAL(10,8)) AS destination_latitude,
+        CAST(d.longitude AS DECIMAL(11,8)) AS destination_longitude
+      FROM itinerary_items ii
+      JOIN itinerary i ON ii.itinerary_id = i.itinerary_id
+      LEFT JOIN experience e ON ii.experience_id = e.experience_id
+      LEFT JOIN destination d ON e.destination_id = d.destination_id
+      WHERE ii.item_id IN (${placeholders}) AND i.traveler_id = ?
+      ORDER BY ii.day_number, ii.start_time`,
+      [...item_ids, user_id]
+    );
+
+    // Return only items that belong to the user
+    res.status(200).json({
+      success: true,
+      data: items,
+      requested: item_ids.length,
+      returned: items.length
+    });
+
+  } catch (err) {
+    console.error('Error in getItineraryItemsByIds:', err);
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error', 
+      details: err.message 
+    });
+  }
+};
 const getItineraryItems = async (req, res) => {
   const { itinerary_id } = req.params;
 
@@ -780,6 +1055,7 @@ module.exports = {
   getCurrentActivityInfo,
   getItineraryWithRealTimeStatus,
   getItineraryById,
+  getItineraryItemById,
   getItineraryItems,
   updateItinerary,
   deleteItinerary,
