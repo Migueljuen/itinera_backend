@@ -3,7 +3,6 @@ const db = require('../config/db.js');
 const path = require('path');
 const { CITY_CENTERS, calculateDistanceFromCityCenter } = require('../utils/cityUtils');
 
-
 const generateItinerary = async (req, res) => {
   const { 
     traveler_id, 
@@ -15,7 +14,7 @@ const generateItinerary = async (req, res) => {
     explore_time, 
     budget,
     activity_intensity,
-    travel_distance, // New field
+    travel_distance,
     title,
     notes
   } = req.body;
@@ -68,6 +67,18 @@ const generateItinerary = async (req, res) => {
 
     const totalDays = endDate.diff(startDate, 'day') + 1;
 
+    // Get diagnostic information about available experiences
+    const diagnosticInfo = await getDiagnosticInfo({
+      city,
+      experience_types,
+      travel_companion,
+      explore_time,
+      budget,
+      travel_distance,
+      start_date,
+      end_date
+    });
+
     // Step 1: Get suitable experiences based on preferences (including travel distance)
     const experiences = await getFilteredExperiences({
       city,
@@ -75,7 +86,7 @@ const generateItinerary = async (req, res) => {
       travel_companion,
       explore_time,
       budget,
-      travel_distance, // Pass travel distance to filtering function
+      travel_distance,
       start_date,
       end_date
     });
@@ -83,7 +94,35 @@ const generateItinerary = async (req, res) => {
     console.log('Found experiences:', experiences.length);
 
     if (experiences.length === 0) {
-      return res.status(404).json({ message: 'No suitable experiences found for your preferences' });
+      // Enhanced error response with detailed information
+      return res.status(404).json({ 
+        error: 'no_experiences_found',
+        message: 'No suitable experiences found for your preferences',
+        details: {
+          total_experiences_in_city: diagnosticInfo.totalInCity,
+          filter_breakdown: diagnosticInfo.filterBreakdown,
+          suggestions: generateSuggestions(diagnosticInfo),
+          conflicting_preferences: analyzeConflicts(req.body),
+          alternative_options: {
+            nearby_cities: diagnosticInfo.nearbyCities,
+            popular_experiences: diagnosticInfo.popularExperiences
+          }
+        }
+      });
+    }
+
+    // Check if we have enough experiences for the trip duration
+    const experiencesPerDay = {
+      'low': 2,
+      'moderate': 3,
+      'high': 4
+    }[activity_intensity.toLowerCase()] || 2;
+
+    const requiredExperiences = totalDays * experiencesPerDay;
+    
+    if (experiences.length < requiredExperiences * 0.5) {
+      // Warning: Not enough experiences for a full itinerary
+      console.warn(`Only ${experiences.length} experiences found, but ${requiredExperiences} recommended for ${totalDays} days`);
     }
 
     // Step 2: Generate smart itinerary distribution with activity intensity
@@ -94,7 +133,7 @@ const generateItinerary = async (req, res) => {
       explore_time,
       travel_companion,
       activity_intensity,
-      travel_distance, // Pass travel distance to generation function
+      travel_distance,
       start_date 
     });
 
@@ -153,7 +192,7 @@ const generateItinerary = async (req, res) => {
       total_experiences: experiences.length,
       selected_experiences: generatedItinerary.length,
       activity_intensity: activity_intensity,
-      travel_distance: travel_distance, // Include in response
+      travel_distance: travel_distance,
       generated: true
     });
 
@@ -162,6 +201,7 @@ const generateItinerary = async (req, res) => {
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
+
 
 const saveItinerary = async (req, res) => {
   const {
@@ -484,6 +524,232 @@ const smartItineraryGeneration = async ({
   return itinerary;
 };
 
+
+// Helper function to get diagnostic information
+const getDiagnosticInfo = async ({
+  city,
+  experience_types,
+  travel_companion,
+  explore_time,
+  budget,
+  travel_distance,
+  start_date,
+  end_date
+}) => {
+  try {
+    // Get total experiences in the city
+    const [totalInCityResult] = await db.query(`
+      SELECT COUNT(DISTINCT e.experience_id) as total
+      FROM experience e
+      JOIN destination d ON e.destination_id = d.destination_id
+      WHERE e.status = 'active' 
+      AND LOWER(d.city) LIKE ?
+    `, [`%${city.toLowerCase()}%`]);
+
+    const totalInCity = totalInCityResult[0]?.total || 0;
+
+    // Progressive filtering to see where experiences are filtered out
+    const filterBreakdown = {};
+
+    // 1. After travel companion filter
+    const [afterCompanionResult] = await db.query(`
+      SELECT COUNT(DISTINCT e.experience_id) as count
+      FROM experience e
+      JOIN destination d ON e.destination_id = d.destination_id
+      WHERE e.status = 'active' 
+      AND LOWER(d.city) LIKE ?
+      AND (? = 'Any' OR LOWER(e.travel_companion) = LOWER(?))
+    `, [`%${city.toLowerCase()}%`, travel_companion, travel_companion]);
+    
+    filterBreakdown.after_travel_companion = afterCompanionResult[0]?.count || 0;
+
+    // 2. After budget filter
+    let budgetCondition = '';
+    const budgetParams = [];
+    
+    switch (budget?.toLowerCase()) {
+      case 'free':
+        budgetCondition = 'AND e.price = 0';
+        break;
+      case 'budget-friendly':
+        budgetCondition = 'AND e.price <= 500';
+        break;
+      case 'mid-range':
+        budgetCondition = 'AND e.price <= 2000';
+        break;
+      case 'premium':
+        budgetCondition = 'AND e.price > 2000';
+        break;
+    }
+
+    const [afterBudgetResult] = await db.query(`
+      SELECT COUNT(DISTINCT e.experience_id) as count
+      FROM experience e
+      JOIN destination d ON e.destination_id = d.destination_id
+      WHERE e.status = 'active' 
+      AND LOWER(d.city) LIKE ?
+      AND (? = 'Any' OR LOWER(e.travel_companion) = LOWER(?))
+      ${budgetCondition}
+    `, [`%${city.toLowerCase()}%`, travel_companion, travel_companion, ...budgetParams]);
+    
+    filterBreakdown.after_budget = afterBudgetResult[0]?.count || 0;
+
+    // 3. After distance filter
+    // This is simplified - in production you'd calculate actual distances
+    filterBreakdown.after_distance = filterBreakdown.after_budget; // Placeholder
+
+    // 4. After availability/time filter
+    let tripDayNames = [];
+    if (start_date && end_date) {
+      // Calculate day names as in original code
+      const startDateObj = new Date(start_date);
+      const endDateObj = new Date(end_date);
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const tripDaysSet = new Set();
+      
+      for (let d = new Date(startDateObj); d <= endDateObj; d.setDate(d.getDate() + 1)) {
+        tripDaysSet.add(dayNames[d.getDay()]);
+      }
+      tripDayNames = Array.from(tripDaysSet);
+    }
+
+    if (tripDayNames.length > 0) {
+      const [afterAvailabilityResult] = await db.query(`
+        SELECT COUNT(DISTINCT e.experience_id) as count
+        FROM experience e
+        JOIN destination d ON e.destination_id = d.destination_id
+        JOIN experience_availability ea ON e.experience_id = ea.experience_id
+        WHERE e.status = 'active' 
+        AND LOWER(d.city) LIKE ?
+        AND (? = 'Any' OR LOWER(e.travel_companion) = LOWER(?))
+        ${budgetCondition}
+        AND ea.day_of_week IN (${tripDayNames.map(() => '?').join(',')})
+      `, [`%${city.toLowerCase()}%`, travel_companion, travel_companion, ...budgetParams, ...tripDayNames]);
+      
+      filterBreakdown.after_availability = afterAvailabilityResult[0]?.count || 0;
+    } else {
+      filterBreakdown.after_availability = filterBreakdown.after_budget;
+    }
+
+    // Get popular experiences in the city
+    const [popularExperiences] = await db.query(`
+      SELECT e.title, e.price, e.travel_companion, COUNT(ii.experience_id) as booking_count
+      FROM experience e
+      JOIN destination d ON e.destination_id = d.destination_id
+      LEFT JOIN itinerary_items ii ON e.experience_id = ii.experience_id
+      WHERE e.status = 'active' 
+      AND LOWER(d.city) LIKE ?
+      GROUP BY e.experience_id
+      ORDER BY booking_count DESC
+      LIMIT 5
+    `, [`%${city.toLowerCase()}%`]);
+
+    // Get nearby cities with experiences
+    const [nearbyCities] = await db.query(`
+      SELECT DISTINCT d.city, COUNT(e.experience_id) as experience_count
+      FROM destination d
+      JOIN experience e ON d.destination_id = e.destination_id
+      WHERE e.status = 'active'
+      AND d.city != ?
+      GROUP BY d.city
+      ORDER BY experience_count DESC
+      LIMIT 5
+    `, [city]);
+
+    return {
+      totalInCity,
+      filterBreakdown,
+      popularExperiences: popularExperiences.map(exp => ({
+        title: exp.title,
+        price: exp.price,
+        travel_companion: exp.travel_companion,
+        popularity: exp.booking_count
+      })),
+      nearbyCities: nearbyCities.map(c => ({
+        city: c.city,
+        experience_count: c.experience_count
+      }))
+    };
+
+  } catch (error) {
+    console.error('Error getting diagnostic info:', error);
+    return {
+      totalInCity: 0,
+      filterBreakdown: {},
+      popularExperiences: [],
+      nearbyCities: []
+    };
+  }
+};
+
+// Generate smart suggestions based on filter breakdown
+const generateSuggestions = (diagnosticInfo) => {
+  const suggestions = [];
+  const breakdown = diagnosticInfo.filterBreakdown;
+
+  // Analyze where the biggest drop happens
+  if (breakdown.after_travel_companion === 0) {
+    suggestions.push('Try selecting "Any" for travel companion to see all available experiences');
+  } else if (breakdown.after_travel_companion < diagnosticInfo.totalInCity * 0.3) {
+    suggestions.push('Consider changing your travel companion preference - it\'s limiting your options significantly');
+  }
+
+  if (breakdown.after_budget < breakdown.after_travel_companion * 0.5) {
+    suggestions.push('Your budget range is very restrictive. Consider expanding it to see more options');
+  }
+
+  if (breakdown.after_availability < breakdown.after_budget * 0.5) {
+    suggestions.push('Many experiences aren\'t available on your travel dates. Consider flexible dates if possible');
+  }
+
+  // General suggestions
+  if (diagnosticInfo.totalInCity < 10) {
+    suggestions.push(`${diagnosticInfo.nearbyCities[0]?.city || 'Nearby cities'} might have more experiences available`);
+  }
+
+  if (suggestions.length === 0) {
+    suggestions.push('Try relaxing some of your preferences to see more options');
+    suggestions.push('Consider mixing different experience types for variety');
+  }
+
+  return suggestions;
+};
+
+// Analyze potentially conflicting preferences
+const analyzeConflicts = (preferences) => {
+  const conflicts = [];
+
+  // Budget vs Experience Type conflicts
+  if (preferences.budget === 'Free' && preferences.experience_types?.includes('Food')) {
+    conflicts.push('Free budget with Food experiences is very limiting - most food experiences have costs');
+  }
+
+  // Time vs Experience Type conflicts
+  if (preferences.explore_time === 'Nighttime' && preferences.experience_types?.includes('Nature')) {
+    conflicts.push('Nature experiences typically happen during daytime - consider "Both" for explore time');
+  }
+
+  // Intensity vs Experience Type conflicts
+  if (preferences.activity_intensity === 'High' && preferences.experience_types?.includes('Relaxation')) {
+    conflicts.push('High intensity conflicts with Relaxation experiences');
+  }
+
+  if (preferences.activity_intensity === 'Low' && preferences.experience_types?.includes('Adventure')) {
+    conflicts.push('Low intensity might limit Adventure experiences which tend to be more active');
+  }
+
+  // Travel companion conflicts
+  if (preferences.travel_companion === 'Solo' && preferences.experience_types?.includes('Nightlife')) {
+    conflicts.push('Some nightlife experiences might be better with companions');
+  }
+
+  // Distance vs variety conflicts
+  if (preferences.travel_distance === 'Nearby' && preferences.experience_types?.length > 3) {
+    conflicts.push('Limiting to nearby locations while wanting many experience types might reduce options');
+  }
+
+  return conflicts;
+};
 // Corrected filtering function that properly joins with availability tables
 const getFilteredExperiences = async ({
   city,
