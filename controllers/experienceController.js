@@ -644,6 +644,300 @@ const createExperience = async (req, res) => {
   }
 };
 
+
+const createMultipleExperiences = async (req, res) => {
+  const experiences = req.body; // Array of experience objects
+
+  // Validate that request body is an array
+  if (!Array.isArray(experiences) || experiences.length === 0) {
+    return res.status(400).json({ message: 'Request body must be a non-empty array of experiences' });
+  }
+
+  // Get uploaded files if any (for bulk upload, files would need special handling)
+  const files = req.files || [];
+
+  const results = [];
+  const errors = [];
+
+  // Begin transaction for atomicity across all experiences
+  const connection = await db.getConnection();
+  await connection.beginTransaction();
+
+  try {
+    for (let i = 0; i < experiences.length; i++) {
+      const experienceData = experiences[i];
+      
+      // Extract data for current experience
+      const { 
+        creator_id, title, description, price, unit, availability, tags, status,
+        destination_name, city, destination_description, latitude, longitude,
+        destination_id,
+        travel_companions
+      } = experienceData;
+
+      try {
+        // Validate experience required fields
+        if (!creator_id || !price || !unit) {
+          throw new Error(`Experience ${i + 1}: All experience fields are required`);
+        }
+
+        // Validate 'unit' value
+        const validUnits = ['Entry', 'Hour', 'Day', 'Package'];
+        if (!validUnits.includes(unit)) {
+          throw new Error(`Experience ${i + 1}: Invalid unit type`);
+        }
+
+        // Validate 'status' value if provided
+        const validStatuses = ['draft', 'inactive', 'active'];
+        const experienceStatus = status || 'draft';
+        if (!validStatuses.includes(experienceStatus)) {
+          throw new Error(`Experience ${i + 1}: Invalid status value`);
+        }
+
+        // Check if creator_id exists and has role 'Creator'
+        const [user] = await connection.query('SELECT role FROM users WHERE user_id = ?', [creator_id]);
+        if (user.length === 0) {
+          throw new Error(`Experience ${i + 1}: Creator not found`);
+        }
+        if (user[0].role !== 'Creator') {
+          throw new Error(`Experience ${i + 1}: User must have role "Creator" to create an experience`);
+        }
+
+        // Parse and validate travel companions
+        let parsedCompanions = [];
+        try {
+          parsedCompanions = Array.isArray(travel_companions) 
+            ? travel_companions 
+            : JSON.parse(travel_companions);
+        } catch (e) {
+          throw new Error(`Experience ${i + 1}: Invalid travel_companions format`);
+        }
+
+        // Validate companion types
+        const validCompanions = ['Solo', 'Partner', 'Family', 'Friends', 'Group', 'Any'];
+        if (!Array.isArray(parsedCompanions) || parsedCompanions.length === 0) {
+          throw new Error(`Experience ${i + 1}: At least one travel companion type is required`);
+        }
+
+        const invalidCompanions = parsedCompanions.filter(c => !validCompanions.includes(c));
+        if (invalidCompanions.length > 0) {
+          throw new Error(`Experience ${i + 1}: Invalid travel companion types: ${invalidCompanions.join(', ')}`);
+        }
+
+        // Parse and validate tags
+        let parsedTags;
+        try {
+          parsedTags = Array.isArray(tags) ? tags : JSON.parse(tags);
+        } catch (e) {
+          throw new Error(`Experience ${i + 1}: Invalid tags format`);
+        }
+
+        if (!parsedTags || !Array.isArray(parsedTags) || parsedTags.length === 0) {
+          throw new Error(`Experience ${i + 1}: At least one tag is required`);
+        }
+
+        // Verify that all tag IDs exist
+        const [existingTags] = await connection.query(
+          'SELECT tag_id FROM tags WHERE tag_id IN (?)',
+          [parsedTags]
+        );
+        if (existingTags.length !== parsedTags.length) {
+          throw new Error(`Experience ${i + 1}: One or more tag IDs do not exist`);
+        }
+
+        // Handle destination - either use existing one or create new one
+        let finalDestinationId;
+
+        if (destination_id) {
+          const [destinationCheck] = await connection.query(
+            'SELECT destination_id FROM destination WHERE destination_id = ?',
+            [destination_id]
+          );
+          if (destinationCheck.length === 0) {
+            throw new Error(`Experience ${i + 1}: Specified destination does not exist`);
+          }
+          finalDestinationId = destination_id;
+        } else {
+          if (!destination_name || !city || !destination_description || !latitude || !longitude) {
+            throw new Error(`Experience ${i + 1}: All destination fields are required when creating a new destination`);
+          }
+
+          // Check for existing destination first
+          const [existingDestination] = await connection.query(
+            'SELECT destination_id FROM destination WHERE name = ? AND city = ?', 
+            [destination_name, city]
+          );
+          
+          if (existingDestination.length > 0) {
+            finalDestinationId = existingDestination[0].destination_id;
+            console.log(`✅ Experience ${i + 1}: Using existing destination: ${destination_name} (ID: ${finalDestinationId})`);
+          } else {
+            // Calculate distance from city center
+            let distanceFromCenter = null;
+            
+            const cityCenter = CITY_CENTERS[city];
+            if (cityCenter) {
+              distanceFromCenter = calculateDistanceFromCityCenter(
+                parseFloat(latitude),
+                parseFloat(longitude),
+                cityCenter.lat,
+                cityCenter.lng
+              );
+              
+              distanceFromCenter = Math.round(distanceFromCenter * 100) / 100;
+              console.log(`✅ Experience ${i + 1}: Calculated distance for ${destination_name}: ${distanceFromCenter}km from ${city} center`);
+            } else {
+              console.warn(`⚠️ Experience ${i + 1}: Warning: No city center coordinates found for "${city}". Distance will be NULL.`);
+            }
+
+            // Insert destination
+            const [newDestination] = await connection.query(
+              'INSERT INTO destination (name, city, description, latitude, longitude, distance_from_city_center) VALUES (?, ?, ?, ?, ?, ?)',
+              [destination_name, city, destination_description, latitude, longitude, distanceFromCenter]
+            );
+            
+            finalDestinationId = newDestination.insertId;
+            console.log(`✅ Experience ${i + 1}: New destination created: ${destination_name} (ID: ${finalDestinationId}, Distance: ${distanceFromCenter}km)`);
+          }
+        }
+
+        // Insert new experience with JSON travel_companions
+        const [result] = await connection.query(
+          `INSERT INTO experience 
+          (creator_id, destination_id, title, description, price, unit, status, travel_companions, created_at) 
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURDATE())`,
+          [creator_id, finalDestinationId, title || null, description || null, price, unit, experienceStatus, JSON.stringify(parsedCompanions)]
+        );
+
+        const experience_id = result.insertId;
+
+        // Parse and validate availability
+        if (!availability || (typeof availability === 'string' && !availability.trim()) || (Array.isArray(availability) && availability.length === 0)) {
+          throw new Error(`Experience ${i + 1}: Availability information is required`);
+        }
+
+        let parsedAvailability;
+        try {
+          parsedAvailability = Array.isArray(availability) ? availability : JSON.parse(availability);
+        } catch (e) {
+          throw new Error(`Experience ${i + 1}: Invalid availability format`);
+        }
+
+        // Validate each availability entry
+        const validDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+        // Insert availability and time slots
+        for (const dayAvailability of parsedAvailability) {
+          const { day_of_week, time_slots } = dayAvailability;
+
+          if (!validDays.includes(day_of_week) || !Array.isArray(time_slots) || time_slots.length === 0) {
+            throw new Error(`Experience ${i + 1}: Each availability entry must have a valid day and time_slots array`);
+          }
+
+          // Insert into experience_availability
+          const [availabilityResult] = await connection.execute(
+            `INSERT INTO experience_availability (experience_id, day_of_week) VALUES (?, ?)`,
+            [experience_id, day_of_week]
+          );
+          const availability_id = availabilityResult.insertId;
+
+          // Insert all associated time slots
+          for (const slot of time_slots) {
+            const { start_time, end_time } = slot;
+
+            if (!start_time || !end_time) {
+              throw new Error(`Experience ${i + 1}: Each time slot must have a start_time and end_time`);
+            }
+
+            await connection.execute(
+              `INSERT INTO availability_time_slots (availability_id, start_time, end_time) VALUES (?, ?, ?)`,
+              [availability_id, start_time, end_time]
+            );
+          }
+        }
+
+        // Insert tag associations
+        const tagValues = parsedTags.map(tag_id => [experience_id, tag_id]);
+        await connection.query(
+          `INSERT INTO experience_tags (experience_id, tag_id) VALUES ?`,
+          [tagValues]
+        );
+
+        // For bulk upload, file handling would need to be enhanced
+        // Currently skipping image upload for bulk operations
+        
+        results.push({
+          index: i + 1,
+          experience_id,
+          destination_id: finalDestinationId,
+          title: title || `Experience ${i + 1}`,
+          status: 'success',
+          message: 'Experience created successfully'
+        });
+
+        console.log(`✅ Experience ${i + 1} (${title}) created successfully with ID: ${experience_id}`);
+
+      } catch (experienceError) {
+        console.error(`❌ Error creating experience ${i + 1}:`, experienceError.message);
+        errors.push({
+          index: i + 1,
+          title: experienceData.title || `Experience ${i + 1}`,
+          error: experienceError.message
+        });
+        // Continue processing other experiences rather than stopping
+      }
+    }
+
+    // Commit the transaction if we have any successful results
+    if (results.length > 0) {
+      await connection.commit();
+      console.log(`✅ Bulk operation completed. ${results.length} experiences created successfully.`);
+    } else {
+      await connection.rollback();
+      console.log(`❌ Bulk operation failed. No experiences were created.`);
+    }
+    
+    connection.release();
+
+    // Return comprehensive results
+    const response = {
+      message: `Bulk operation completed: ${results.length} successes, ${errors.length} errors`,
+      summary: {
+        total_attempted: experiences.length,
+        successful: results.length,
+        failed: errors.length
+      },
+      results,
+      errors
+    };
+
+    // Return appropriate status code
+    if (errors.length === 0) {
+      res.status(201).json(response);
+    } else if (results.length === 0) {
+      res.status(400).json(response);
+    } else {
+      res.status(207).json(response); // 207 Multi-Status for partial success
+    }
+
+  } catch (err) {
+    await connection.rollback();
+    connection.release();
+    console.error('❌ Bulk operation failed:', err);
+    res.status(500).json({ 
+      error: 'Bulk operation failed', 
+      details: err.message,
+      summary: {
+        total_attempted: experiences.length,
+        successful: results.length,
+        failed: experiences.length - results.length
+      },
+      results,
+      errors
+    });
+  }
+};
+
 // const getAllExperience = async (req, res) => {
 //   try {
 //     const {
@@ -2652,4 +2946,4 @@ const getSavedExperiences = async (req, res) => {
 
 
 
-module.exports = { upload, createExperienceHandler: [upload.array('images', 5), createExperience], createExperience, getAllExperience,getExperienceAvailability, getExperienceById, getAvailableTimeSlots, updateExperience,updateExperienceSection, saveExperience, getSavedExperiences, getExperienceByUserID, getActiveExperience };
+module.exports = { upload, createExperienceHandler: [upload.array('images', 5), createExperience], createExperience, createMultipleExperiences, getAllExperience,getExperienceAvailability, getExperienceById, getAvailableTimeSlots, updateExperience,updateExperienceSection, saveExperience, getSavedExperiences, getExperienceByUserID, getActiveExperience };

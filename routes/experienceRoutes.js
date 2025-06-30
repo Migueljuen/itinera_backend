@@ -4,6 +4,7 @@ const {
     upload, 
     createExperienceHandler, 
     createExperience, 
+    createMultipleExperiences,  // Add this import
     getAllExperience,
     getAvailableTimeSlots,
     getExperienceAvailability, 
@@ -18,6 +19,7 @@ const {
 // const authenticateToken = require('../middleware/auth');
 
 router.post('/create', createExperienceHandler);
+router.post('/bulk', upload.array('images'), createMultipleExperiences);  // Add bulk endpoint
 // router.post('/create', upload.array('image', 10), createExperience);
 router.post('/save', saveExperience);
 router.get('/saved/:user_id', getSavedExperiences);
