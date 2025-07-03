@@ -2,6 +2,7 @@ const dayjs = require('dayjs');
 const db = require('../config/db.js');
 const path = require('path');
 const { CITY_CENTERS, calculateDistanceFromCityCenter } = require('../utils/cityUtils');
+const notificationService = require('../services/notificationService');
 
 // const generateItinerary = async (req, res) => {
 //   const { 
@@ -477,8 +478,119 @@ const saveItinerary = async (req, res) => {
       );
     }
 
-    // Step 3: Return the saved itinerary with full details
+    // Step 3: Get the saved itinerary with full details
     const savedItinerary = await getItineraryWithDetails(itinerary_id);
+
+    // Step 4: Create notifications for the saved itinerary
+    try {
+      // Get destination info from the first item (you might want to adjust this based on your data structure)
+      const destinationInfo = await getDestinationInfo(savedItinerary);
+      
+      // Create immediate confirmation notification
+      await notificationService.createNotification({
+        user_id: traveler_id,
+        type: 'update',
+        title: `Trip to ${destinationInfo.name || title} Saved!`,
+        description: 'Your itinerary has been created successfully. We\'ll remind you when it\'s time to pack!',
+        itinerary_id: itinerary_id,
+        icon: 'checkmark-circle',
+        icon_color: '#10B981',
+        created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
+      });
+
+      // Create trip reminder notifications
+      const tripStartDate = dayjs(start_date);
+      
+      // 3 days before reminder
+      const threeDaysBefore = tripStartDate.subtract(3, 'day');
+      if (threeDaysBefore.isAfter(dayjs())) {
+        await notificationService.createScheduledNotification({
+          user_id: traveler_id,
+          type: 'reminder',
+          title: `Upcoming Trip: ${title}`,
+          description: 'Your adventure starts in 3 days! Time to start preparing.',
+          itinerary_id: itinerary_id,
+          icon: 'calendar',
+          icon_color: '#3B82F6',
+          scheduled_for: threeDaysBefore.format('YYYY-MM-DD 09:00:00'), // 9 AM
+          created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
+        });
+      }
+
+      // 1 day before reminder
+      const oneDayBefore = tripStartDate.subtract(1, 'day');
+      if (oneDayBefore.isAfter(dayjs())) {
+        await notificationService.createScheduledNotification({
+          user_id: traveler_id,
+          type: 'reminder',
+          title: `Tomorrow: ${title}`,
+          description: 'Your trip starts tomorrow! Don\'t forget to check your itinerary and pack everything you need.',
+          itinerary_id: itinerary_id,
+          icon: 'airplane',
+          icon_color: '#4F46E5',
+          scheduled_for: oneDayBefore.format('YYYY-MM-DD 18:00:00'), // 6 PM
+          created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
+        });
+      }
+
+      // Create activity reminder notifications for each day
+      if (items.length > 0) {
+        // Group items by day
+        const itemsByDay = items.reduce((acc, item) => {
+          if (!acc[item.day_number]) {
+            acc[item.day_number] = [];
+          }
+          acc[item.day_number].push(item);
+          return acc;
+        }, {});
+
+        // Create notifications for each day's activities
+        for (const [dayNumber, dayItems] of Object.entries(itemsByDay)) {
+          const activityDate = tripStartDate.add(parseInt(dayNumber) - 1, 'day');
+          const dayBefore = activityDate.subtract(1, 'day');
+          
+          if (dayBefore.isAfter(dayjs()) && dayItems.length > 0) {
+            // Get experience details for the notification
+            const firstActivity = await getExperienceDetails(dayItems[0].experience_id);
+            const activityCount = dayItems.length;
+            
+            await notificationService.createScheduledNotification({
+              user_id: traveler_id,
+              type: 'activity',
+              title: `Day ${dayNumber} Activities Tomorrow`,
+              description: activityCount === 1 
+                ? `${firstActivity?.title || 'Your activity'} starts at ${dayItems[0].start_time}`
+                : `${activityCount} activities planned, starting with ${firstActivity?.title || 'your first activity'} at ${dayItems[0].start_time}`,
+              itinerary_id: itinerary_id,
+              icon: 'location',
+              icon_color: '#F59E0B',
+              scheduled_for: dayBefore.format('YYYY-MM-DD 19:00:00'), // 7 PM
+              created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
+            });
+          }
+        }
+      }
+
+      // Day of trip notification
+      if (tripStartDate.isAfter(dayjs())) {
+        await notificationService.createScheduledNotification({
+          user_id: traveler_id,
+          type: 'alert',
+          title: `Welcome to Your Adventure!`,
+          description: `Your ${title} trip begins today. Have an amazing time!`,
+          itinerary_id: itinerary_id,
+          icon: 'rocket',
+          icon_color: '#10B981',
+          scheduled_for: tripStartDate.format('YYYY-MM-DD 07:00:00'), // 7 AM
+          created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
+        });
+      }
+
+    } catch (notificationError) {
+      // Log notification errors but don't fail the entire save operation
+      console.error('Error creating notifications:', notificationError);
+      // You might want to track this in an error monitoring service
+    }
 
     res.status(201).json({
       message: 'Itinerary saved successfully',
@@ -489,6 +601,34 @@ const saveItinerary = async (req, res) => {
   } catch (err) {
     console.error('Error saving itinerary:', err);
     res.status(500).json({ error: 'Server error', details: err.message });
+  }
+};
+
+// Helper function to get destination info
+const getDestinationInfo = async (itinerary) => {
+  try {
+    // This depends on your data structure
+    // You might get it from the first item's destination or from the itinerary itself
+    if (itinerary.items && itinerary.items.length > 0 && itinerary.items[0].destination) {
+      return itinerary.items[0].destination;
+    }
+    return { name: itinerary.title };
+  } catch (error) {
+    return { name: itinerary.title };
+  }
+};
+
+// Helper function to get experience details
+const getExperienceDetails = async (experienceId) => {
+  try {
+    const [rows] = await db.query(
+      'SELECT title, description FROM experience WHERE experience_id = ?',
+      [experienceId]
+    );
+    return rows[0] || null;
+  } catch (error) {
+    console.error('Error fetching experience details:', error);
+    return null;
   }
 };
 

@@ -51,6 +51,8 @@ app.use('/itinerary', itineraryExperienceRoutes);
 const authRoutes = require('./routes/authRoutes');
 app.use('/api', authRoutes);
 
+const notificationRoutes = require('./routes/notificationRoutes');
+app.use('/notifications', notificationRoutes);
 // Start server
 app.listen(port, '0.0.0.0', () => {
   console.log(`Server running on http://localhost:${port}`);
