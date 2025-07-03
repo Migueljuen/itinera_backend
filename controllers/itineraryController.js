@@ -1,7 +1,7 @@
 const dayjs = require('dayjs');  // Import Day.js
 const db = require('../config/db.js');
 const path = require('path');
-
+const notificationService = require('../services/notificationService.js');
 const createItinerary = async (req, res) => {
   const { 
     traveler_id, 
@@ -203,7 +203,6 @@ const createItinerary = async (req, res) => {
   }
 };
 
-// Enhanced status update function that considers activity end times
 const updateItineraryStatuses = async () => {
   try {
     const currentDateTime = dayjs().format('YYYY-MM-DD HH:mm:ss');
@@ -212,6 +211,16 @@ const updateItineraryStatuses = async () => {
     console.log(`🕒 Updating itinerary statuses for: ${currentDateTime}`);
     
     // STEP 1: Update to 'ongoing' - itineraries that have started but not ended
+    // First, get the itineraries that will be updated (for notifications)
+    const [itinerariesToStart] = await db.query(`
+      SELECT itinerary_id, traveler_id, title, start_date
+      FROM itinerary 
+      WHERE start_date <= ? 
+        AND end_date >= ? 
+        AND status = 'upcoming'
+    `, [currentDate, currentDate]);
+    
+    // Update the statuses
     const [ongoingResult] = await db.query(`
       UPDATE itinerary 
       SET status = 'ongoing' 
@@ -222,9 +231,80 @@ const updateItineraryStatuses = async () => {
     
     console.log(`✅ Updated ${ongoingResult.affectedRows} itineraries to 'ongoing'`);
     
+    // Send notifications for newly started trips (only for itineraries that just changed status)
+    for (const itinerary of itinerariesToStart) {
+      try {
+        // Check if we already sent a "trip started" notification for this itinerary today
+        const [existingWelcome] = await db.query(`
+          SELECT id FROM notifications 
+          WHERE user_id = ? 
+            AND itinerary_id = ? 
+            AND type = 'alert' 
+            AND title = 'Welcome to Your Adventure!'
+            AND DATE(created_at) = CURDATE()
+        `, [itinerary.traveler_id, itinerary.itinerary_id]);
+        
+        if (existingWelcome.length === 0) {
+          await notificationService.createNotification({
+            user_id: itinerary.traveler_id,
+            type: 'alert',
+            title: `Welcome to Your Adventure!`,
+            description: `Your trip "${itinerary.title}" has begun. Have an amazing time!`,
+            itinerary_id: itinerary.itinerary_id,
+            icon: 'airplane',
+            icon_color: '#3B82F6',
+            created_at: currentDateTime
+          });
+          
+          console.log(`📧 Sent welcome notification for itinerary ${itinerary.itinerary_id}`);
+        } else {
+          console.log(`⏭️ Welcome notification already sent for itinerary ${itinerary.itinerary_id} today`);
+        }
+        
+        // Check for today's activities notification
+        const [existingActivities] = await db.query(`
+          SELECT id FROM notifications 
+          WHERE user_id = ? 
+            AND itinerary_id = ? 
+            AND type = 'reminder' 
+            AND title = 'Today\'s Activities'
+            AND DATE(created_at) = CURDATE()
+        `, [itinerary.traveler_id, itinerary.itinerary_id]);
+        
+        if (existingActivities.length === 0) {
+          // Also create a notification for the first day's activities
+          const [firstDayActivities] = await db.query(`
+            SELECT COUNT(*) as activity_count, MIN(start_time) as first_activity_time
+            FROM itinerary_items
+            WHERE itinerary_id = ? AND day_number = 1
+          `, [itinerary.itinerary_id]);
+          
+          if (firstDayActivities[0].activity_count > 0) {
+            await notificationService.createNotification({
+              user_id: itinerary.traveler_id,
+              type: 'reminder',
+              title: `Today's Activities`,
+              description: `You have ${firstDayActivities[0].activity_count} activities planned today, starting at ${formatTime(firstDayActivities[0].first_activity_time)}`,
+              itinerary_id: itinerary.itinerary_id,
+              icon: 'calendar',
+              icon_color: '#10B981',
+              created_at: currentDateTime
+            });
+            
+            console.log(`📧 Sent activities notification for itinerary ${itinerary.itinerary_id}`);
+          }
+        } else {
+          console.log(`⏭️ Activities notification already sent for itinerary ${itinerary.itinerary_id} today`);
+        }
+        
+      } catch (notifError) {
+        console.error(`Error creating notification for itinerary ${itinerary.itinerary_id}:`, notifError);
+      }
+    }
+    
     // STEP 2: Find itineraries that should be completed based on last activity end time
     const [itinerariesToComplete] = await db.query(`
-      SELECT DISTINCT i.itinerary_id, i.title, i.end_date,
+      SELECT DISTINCT i.itinerary_id, i.title, i.end_date, i.traveler_id,
              MAX(CONCAT(
                DATE_ADD(i.start_date, INTERVAL (ii.day_number - 1) DAY), 
                ' ', 
@@ -233,7 +313,7 @@ const updateItineraryStatuses = async () => {
       FROM itinerary i
       JOIN itinerary_items ii ON i.itinerary_id = ii.itinerary_id
       WHERE i.status IN ('upcoming', 'ongoing')
-      GROUP BY i.itinerary_id, i.title, i.end_date
+      GROUP BY i.itinerary_id, i.title, i.end_date, i.traveler_id
       HAVING last_activity_end_datetime < ?
     `, [currentDateTime]);
     
@@ -250,10 +330,60 @@ const updateItineraryStatuses = async () => {
         WHERE itinerary_id IN (${itineraryIds.map(() => '?').join(',')})
       `, itineraryIds);
       
-      // Log details for each completed itinerary
-      itinerariesToComplete.forEach(item => {
+      // Send completion notifications (with duplicate prevention)
+      for (const item of itinerariesToComplete) {
         console.log(`✅ Completed: "${item.title}" (last activity ended: ${item.last_activity_end_datetime})`);
-      });
+        
+        try {
+          // Check if completion notification already sent
+          const [existingCompletion] = await db.query(`
+            SELECT id FROM notifications 
+            WHERE user_id = ? 
+              AND itinerary_id = ? 
+              AND type = 'reminder' 
+              AND title = 'Trip Completed!'
+          `, [item.traveler_id, item.itinerary_id]);
+          
+          if (existingCompletion.length === 0) {
+            // Send completion notification
+            await notificationService.createNotification({
+              user_id: item.traveler_id,
+              type: 'reminder',
+              title: 'Trip Completed!',
+              description: `How was your "${item.title}" trip? We'd love to hear about your experience!`,
+              itinerary_id: item.itinerary_id,
+              icon: 'star-outline',
+              icon_color: '#EF4444',
+              created_at: currentDateTime
+            });
+            
+            // Get trip statistics for a more detailed notification
+            const [tripStats] = await db.query(`
+              SELECT COUNT(*) as total_activities,
+                     COUNT(DISTINCT day_number) as total_days
+              FROM itinerary_items
+              WHERE itinerary_id = ?
+            `, [item.itinerary_id]);
+            
+            if (tripStats[0].total_activities > 0) {
+              await notificationService.createNotification({
+                user_id: item.traveler_id,
+                type: 'update',
+                title: 'Trip Summary',
+                description: `You completed ${tripStats[0].total_activities} activities over ${tripStats[0].total_days} days. Great job!`,
+                itinerary_id: item.itinerary_id,
+                icon: 'checkmark-circle',
+                icon_color: '#10B981',
+                created_at: currentDateTime
+              });
+            }
+          } else {
+            console.log(`⏭️ Completion notification already sent for itinerary ${item.itinerary_id}`);
+          }
+        } catch (notifError) {
+          console.error(`Error creating completion notification for itinerary ${item.itinerary_id}:`, notifError);
+        }
+      }
     }
     
     return {
@@ -264,6 +394,154 @@ const updateItineraryStatuses = async () => {
     
   } catch (error) {
     console.error('❌ Error updating itinerary statuses:', error);
+    throw error;
+  }
+};
+// Helper function to format time
+const formatTime = (timeString) => {
+  if (!timeString) return '';
+  const [hours, minutes] = timeString.split(':');
+  const hour = parseInt(hours);
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${minutes} ${ampm}`;
+};
+
+// Enhanced getCurrentActivityInfo with notifications for upcoming activities
+const getCurrentActivityInfo = async (itineraryId) => {
+  try {
+    const currentDateTime = dayjs().format('YYYY-MM-DD HH:mm:ss');
+    
+    // Get itinerary details first
+    const [itineraryInfo] = await db.query(`
+      SELECT traveler_id, title FROM itinerary WHERE itinerary_id = ?
+    `, [itineraryId]);
+    
+    if (itineraryInfo.length === 0) return null;
+    
+    const { traveler_id, title: itineraryTitle } = itineraryInfo[0];
+    
+    const [currentActivity] = await db.query(`
+      SELECT ii.*, e.title as experience_name, d.name as destination_name,
+             CONCAT(
+               DATE_ADD(i.start_date, INTERVAL (ii.day_number - 1) DAY), 
+               ' ', 
+               ii.start_time
+             ) as activity_start_datetime,
+             CONCAT(
+               DATE_ADD(i.start_date, INTERVAL (ii.day_number - 1) DAY), 
+               ' ', 
+               ii.end_time
+             ) as activity_end_datetime
+      FROM itinerary i
+      JOIN itinerary_items ii ON i.itinerary_id = ii.itinerary_id
+      JOIN experience e ON ii.experience_id = e.experience_id
+      LEFT JOIN destination d ON e.destination_id = d.destination_id
+      WHERE i.itinerary_id = ?
+        AND CONCAT(
+          DATE_ADD(i.start_date, INTERVAL (ii.day_number - 1) DAY), 
+          ' ', 
+          ii.start_time
+        ) <= ?
+        AND CONCAT(
+          DATE_ADD(i.start_date, INTERVAL (ii.day_number - 1) DAY), 
+          ' ', 
+          ii.end_time
+        ) >= ?
+      ORDER BY ii.day_number, ii.start_time
+      LIMIT 1
+    `, [itineraryId, currentDateTime, currentDateTime]);
+    
+    if (currentActivity.length > 0) {
+      // Check if we need to send a "activity started" notification
+      const activityStartTime = dayjs(currentActivity[0].activity_start_datetime);
+      const timeSinceStart = dayjs().diff(activityStartTime, 'minute');
+      
+      // Send notification if activity just started (within 5 minutes)
+      if (timeSinceStart >= 0 && timeSinceStart <= 5) {
+        try {
+          await notificationService.createNotification({
+            user_id: traveler_id,
+            type: 'activity',
+            title: `Time for ${currentActivity[0].experience_name}!`,
+            description: `Your activity at ${currentActivity[0].destination_name || 'the destination'} is starting now.`,
+            itinerary_id: itineraryId,
+            itinerary_item_id: currentActivity[0].item_id,
+            icon: 'location',
+            icon_color: '#F59E0B',
+            created_at: currentDateTime
+          });
+        } catch (notifError) {
+          console.error('Error sending activity start notification:', notifError);
+        }
+      }
+      
+      return {
+        type: 'current',
+        activity: currentActivity[0],
+        message: `Currently: ${currentActivity[0].experience_name}`
+      };
+    }
+    
+    // If no current activity, find the next one
+    const [nextActivity] = await db.query(`
+      SELECT ii.*, e.title as experience_name, d.name as destination_name,
+             CONCAT(
+               DATE_ADD(i.start_date, INTERVAL (ii.day_number - 1) DAY), 
+               ' ', 
+               ii.start_time
+             ) as activity_start_datetime
+      FROM itinerary i
+      JOIN itinerary_items ii ON i.itinerary_id = ii.itinerary_id
+      JOIN experience e ON ii.experience_id = e.experience_id
+      LEFT JOIN destination d ON e.destination_id = d.destination_id
+      WHERE i.itinerary_id = ?
+        AND CONCAT(
+          DATE_ADD(i.start_date, INTERVAL (ii.day_number - 1) DAY), 
+          ' ', 
+          ii.start_time
+        ) > ?
+      ORDER BY ii.day_number, ii.start_time
+      LIMIT 1
+    `, [itineraryId, currentDateTime]);
+    
+    if (nextActivity.length > 0) {
+      const timeUntilNext = dayjs(nextActivity[0].activity_start_datetime).diff(dayjs(), 'minute');
+      
+      // Send reminder notification if activity is starting in 30 minutes
+      if (timeUntilNext > 25 && timeUntilNext <= 35) {
+        try {
+          await notificationService.createNotification({
+            user_id: traveler_id,
+            type: 'reminder',
+            title: 'Activity Starting Soon',
+            description: `${nextActivity[0].experience_name} starts in 30 minutes at ${nextActivity[0].destination_name || 'your destination'}.`,
+            itinerary_id: itineraryId,
+            itinerary_item_id: nextActivity[0].item_id,
+            icon: 'time',
+            icon_color: '#3B82F6',
+            created_at: currentDateTime
+          });
+        } catch (notifError) {
+          console.error('Error sending activity reminder notification:', notifError);
+        }
+      }
+      
+      return {
+        type: 'upcoming',
+        activity: nextActivity[0],
+        message: `Next: ${nextActivity[0].experience_name} in ${timeUntilNext} minutes`
+      };
+    }
+    
+    return {
+      type: 'completed',
+      activity: null,
+      message: 'All activities completed'
+    };
+    
+  } catch (error) {
+    console.error('Error getting current activity info:', error);
     throw error;
   }
 };
@@ -320,91 +598,6 @@ const calculateItineraryStatus = async (itineraryId) => {
     
   } catch (error) {
     console.error('Error calculating itinerary status:', error);
-    throw error;
-  }
-};
-
-// Enhanced function that gets current activity info for ongoing itineraries
-const getCurrentActivityInfo = async (itineraryId) => {
-  try {
-    const currentDateTime = dayjs().format('YYYY-MM-DD HH:mm:ss');
-    
-    const [currentActivity] = await db.query(`
-      SELECT ii.*, e.title as experience_name,
-             CONCAT(
-               DATE_ADD(i.start_date, INTERVAL (ii.day_number - 1) DAY), 
-               ' ', 
-               ii.start_time
-             ) as activity_start_datetime,
-             CONCAT(
-               DATE_ADD(i.start_date, INTERVAL (ii.day_number - 1) DAY), 
-               ' ', 
-               ii.end_time
-             ) as activity_end_datetime
-      FROM itinerary i
-      JOIN itinerary_items ii ON i.itinerary_id = ii.itinerary_id
-      JOIN experience e ON ii.experience_id = e.experience_id
-      WHERE i.itinerary_id = ?
-        AND CONCAT(
-          DATE_ADD(i.start_date, INTERVAL (ii.day_number - 1) DAY), 
-          ' ', 
-          ii.start_time
-        ) <= ?
-        AND CONCAT(
-          DATE_ADD(i.start_date, INTERVAL (ii.day_number - 1) DAY), 
-          ' ', 
-          ii.end_time
-        ) >= ?
-      ORDER BY ii.day_number, ii.start_time
-      LIMIT 1
-    `, [itineraryId, currentDateTime, currentDateTime]);
-    
-    if (currentActivity.length > 0) {
-      return {
-        type: 'current',
-        activity: currentActivity[0],
-        message: `Currently: ${currentActivity[0].experience_name}`
-      };
-    }
-    
-    // If no current activity, find the next one
-    const [nextActivity] = await db.query(`
-      SELECT ii.*, e.title as experience_name,
-             CONCAT(
-               DATE_ADD(i.start_date, INTERVAL (ii.day_number - 1) DAY), 
-               ' ', 
-               ii.start_time
-             ) as activity_start_datetime
-      FROM itinerary i
-      JOIN itinerary_items ii ON i.itinerary_id = ii.itinerary_id
-      JOIN experience e ON ii.experience_id = e.experience_id
-      WHERE i.itinerary_id = ?
-        AND CONCAT(
-          DATE_ADD(i.start_date, INTERVAL (ii.day_number - 1) DAY), 
-          ' ', 
-          ii.start_time
-        ) > ?
-      ORDER BY ii.day_number, ii.start_time
-      LIMIT 1
-    `, [itineraryId, currentDateTime]);
-    
-    if (nextActivity.length > 0) {
-      const timeUntilNext = dayjs(nextActivity[0].activity_start_datetime).diff(dayjs(), 'minute');
-      return {
-        type: 'upcoming',
-        activity: nextActivity[0],
-        message: `Next: ${nextActivity[0].experience_name} in ${timeUntilNext} minutes`
-      };
-    }
-    
-    return {
-      type: 'completed',
-      activity: null,
-      message: 'All activities completed'
-    };
-    
-  } catch (error) {
-    console.error('Error getting current activity info:', error);
     throw error;
   }
 };
@@ -580,119 +773,6 @@ const getItineraryByTraveler = async (req, res) => {
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
-
-// Enhanced getItineraryById with real-time status updates
-// const getItineraryById = async (req, res) => {
-//   const { itinerary_id } = req.params;
-
-//   if (!itinerary_id) {
-//     return res.status(400).json({ message: 'Itinerary ID is required' });
-//   }
-
-//   try {
-//     // 🆕 Get itinerary with real-time status check
-//     const itineraryWithStatus = await getItineraryWithRealTimeStatus(itinerary_id);
-    
-//     if (!itineraryWithStatus) {
-//       return res.status(404).json({ message: 'Itinerary not found' });
-//     }
-
-//     // Format the dates
-//     const formattedItinerary = {
-//       ...itineraryWithStatus,
-//       start_date: dayjs(itineraryWithStatus.start_date).format('YYYY-MM-DD'),
-//       end_date: dayjs(itineraryWithStatus.end_date).format('YYYY-MM-DD'),
-//       created_at: dayjs(itineraryWithStatus.created_at).format('YYYY-MM-DD HH:mm:ss')
-//     };
-
-//     // Get items for the itinerary with experience details and destination
-//     const [items] = await db.query(
-//       `SELECT 
-//          ii.item_id,
-//          ii.experience_id,
-//          ii.day_number,
-//          ii.start_time,
-//          ii.end_time,
-//          ii.custom_note,
-//          ii.created_at,
-//          ii.updated_at,
-//          e.title AS experience_name, 
-//          e.description AS experience_description,
-//          e.price,
-//          e.unit,
-//          d.name AS destination_name,
-//          d.city AS destination_city
-//        FROM itinerary_items ii
-//        LEFT JOIN experience e ON ii.experience_id = e.experience_id
-//        LEFT JOIN destination d ON e.destination_id = d.destination_id
-//        WHERE ii.itinerary_id = ?
-//        ORDER BY ii.day_number, ii.start_time`,
-//       [itinerary_id]
-//     );
-
-//     // Fetch images for each experience in the items
-//     const itemsWithImages = await Promise.all(
-//       items.map(async (item) => {
-//         if (item.experience_id) {
-//           try {
-//             // Fetch images for this experience
-//             const [imageRows] = await db.query(
-//               `SELECT image_url FROM experience_images WHERE experience_id = ?`,
-//               [item.experience_id]
-//             );
-            
-//             // Convert file system paths to URLs
-//             const images = imageRows.map(img => {
-//               // Extract just the filename from the absolute path
-//               const filename = path.basename(img.image_url);
-//               // Return a relative URL path that your server can handle
-//               return `/uploads/experiences/${filename}`;
-//             });
-
-//             return {
-//               ...item,
-//               images: images,
-//               // Add the first image as primary image for easy access
-//               primary_image: images.length > 0 ? images[0] : null
-//             };
-//           } catch (imageError) {
-//             console.error(`Error fetching images for experience ${item.experience_id}:`, imageError);
-//             return {
-//               ...item,
-//               images: [],
-//               primary_image: null
-//             };
-//           }
-//         } else {
-//           return {
-//             ...item,
-//             images: [],
-//             primary_image: null
-//           };
-//         }
-//       })
-//     );
-
-//     const detailedItinerary = {
-//       ...formattedItinerary,
-//       items: itemsWithImages
-//     };
-
-//     // 🆕 Include current activity info in response
-//     const response = { 
-//       itinerary: detailedItinerary
-//     };
-    
-//     if (itineraryWithStatus.currentActivityInfo) {
-//       response.currentActivity = itineraryWithStatus.currentActivityInfo;
-//     }
-
-//     res.status(200).json(response);
-//   } catch (err) {
-//     console.error('Error in getItineraryById:', err);
-//     res.status(500).json({ error: 'Server error', details: err.message });
-//   }
-// };
 
 // Enhanced getItineraryById with real-time status updates and coordinates
 const getItineraryById = async (req, res) => {

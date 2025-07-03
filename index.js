@@ -1,4 +1,3 @@
-
 const express = require('express');
 const cors = require('cors');
 const port = 3000;
@@ -9,10 +8,10 @@ const path = require('path');
 app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // User
 const userRoutes = require('./routes/userRoutes');
 app.use('/users', userRoutes);
-
 
 // Destination
 const destinationRoutes = require('./routes/destinationRoutes');
@@ -46,14 +45,68 @@ app.use('/itinerary', itineraryRoutes);
 const itineraryExperienceRoutes = require('./routes/itineraryExperienceRoutes');
 app.use('/itinerary', itineraryExperienceRoutes);
 
-
-//login
+// Login
 const authRoutes = require('./routes/authRoutes');
 app.use('/api', authRoutes);
 
+// Notifications
 const notificationRoutes = require('./routes/notificationRoutes');
 app.use('/notifications', notificationRoutes);
+
 // Start server
 app.listen(port, '0.0.0.0', () => {
   console.log(`Server running on http://localhost:${port}`);
+  
+  // Start cron jobs after server is running
+  initializeCronJobs();
+});
+
+// Initialize cron jobs
+function initializeCronJobs() {
+  console.log('🚀 Initializing cron jobs...');
+  
+  try {
+    // Check if cron job files exist before requiring them
+    const fs = require('fs');
+    
+    // Initialize notification cron if file exists
+    const notificationCronPath = path.join(__dirname, 'cron', 'notificationCron.js');
+    if (fs.existsSync(notificationCronPath)) {
+      const { startNotificationCron } = require('./cron/notificationCron');
+      startNotificationCron();
+      console.log('✅ Notification cron job started');
+    } else {
+      console.log('⚠️  Notification cron file not found. Create ./cron/notificationCron.js');
+    }
+    
+    // Initialize status update cron if file exists
+    const statusCronPath = path.join(__dirname, 'cron', 'statusUpdateCron.js');
+    if (fs.existsSync(statusCronPath)) {
+      const { startStatusUpdateCron } = require('./cron/statusUpdateCron');
+      startStatusUpdateCron();
+      console.log('✅ Status update cron job started');
+    } else {
+      console.log('⚠️  Status update cron file not found. Create ./cron/statusUpdateCron.js');
+    }
+    
+    console.log('🎯 All available cron jobs initialized');
+    
+  } catch (error) {
+    console.error('❌ Error initializing cron jobs:', error);
+    console.log('⚠️  Server will continue running without cron jobs');
+  }
+}
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM signal received: closing HTTP server');
+  app.close(() => {
+    console.log('HTTP server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT signal received: closing HTTP server');
+  process.exit(0);
 });
