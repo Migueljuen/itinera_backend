@@ -4,205 +4,22 @@ const path = require('path');
 const { CITY_CENTERS, calculateDistanceFromCityCenter } = require('../utils/cityUtils');
 const notificationService = require('../services/notificationService');
 
-// const generateItinerary = async (req, res) => {
-//   const { 
-//     traveler_id, 
-//     city,
-//     start_date, 
-//     end_date, 
-//     experience_types,
-//     travel_companion, 
-//     explore_time, 
-//     budget,
-//     activity_intensity,
-//     travel_distance,
-//     title,
-//     notes
-//   } = req.body;
-
-//   // Debug: Log the entire request body
-//   console.log('Request body received:', JSON.stringify(req.body, null, 2));
-
-//   // Validate required fields
-//   if (!traveler_id || !start_date || !end_date || !experience_types || 
-//       !travel_companion || !explore_time || !budget || !activity_intensity || !travel_distance) {
-//     return res.status(400).json({ 
-//       message: 'All preference fields are required for itinerary generation',
-//       missing_fields: {
-//         traveler_id: !traveler_id,
-//         start_date: !start_date,
-//         end_date: !end_date,
-//         experience_types: !experience_types,
-//         travel_companion: !travel_companion,
-//         explore_time: !explore_time,
-//         budget: !budget,
-//         activity_intensity: !activity_intensity,
-//         travel_distance: !travel_distance
-//       }
-//     });
-//   }
-
-//   // Validate activity_intensity values
-//   const validIntensities = ['low', 'moderate', 'high'];
-//   if (!validIntensities.includes(activity_intensity.toLowerCase())) {
-//     return res.status(400).json({ 
-//       message: 'Invalid activity_intensity. Must be: low, moderate, or high' 
-//     });
-//   }
-
-//   // Validate travel_distance values
-//   const validTravelDistances = ['nearby', 'moderate', 'far'];
-//   if (!validTravelDistances.includes(travel_distance.toLowerCase())) {
-//     return res.status(400).json({ 
-//       message: 'Invalid travel_distance. Must be: nearby, moderate, or far' 
-//     });
-//   }
-
-//   try {
-//     const startDate = dayjs(start_date);
-//     const endDate = dayjs(end_date);
-
-//     if (startDate.isAfter(endDate)) {
-//       return res.status(400).json({ message: 'Start date cannot be after end date' });
-//     }
-
-//     const totalDays = endDate.diff(startDate, 'day') + 1;
-
-//     // Get diagnostic information about available experiences
-//     const diagnosticInfo = await getDiagnosticInfo({
-//       city,
-//       experience_types,
-//       travel_companion,
-//       explore_time,
-//       budget,
-//       travel_distance,
-//       start_date,
-//       end_date
-//     });
-
-//     // Step 1: Get suitable experiences based on preferences (including travel distance)
-//     const experiences = await getFilteredExperiences({
-//       city,
-//       experience_types,
-//       travel_companion,
-//       explore_time,
-//       budget,
-//       travel_distance,
-//       start_date,
-//       end_date
-//     });
-
-//     console.log('Found experiences:', experiences.length);
-
-//     if (experiences.length === 0) {
-//       // Enhanced error response with detailed information
-//       return res.status(404).json({ 
-//         error: 'no_experiences_found',
-//         message: 'No suitable experiences found for your preferences',
-//         details: {
-//           total_experiences_in_city: diagnosticInfo.totalInCity,
-//           filter_breakdown: diagnosticInfo.filterBreakdown,
-//           suggestions: generateSuggestions(diagnosticInfo),
-//           conflicting_preferences: analyzeConflicts(req.body),
-//           alternative_options: {
-//             nearby_cities: diagnosticInfo.nearbyCities,
-//             popular_experiences: diagnosticInfo.popularExperiences
-//           }
-//         }
-//       });
-//     }
-
-//     // Check if we have enough experiences for the trip duration
-//     const experiencesPerDay = {
-//       'low': 2,
-//       'moderate': 3,
-//       'high': 4
-//     }[activity_intensity.toLowerCase()] || 2;
-
-//     const requiredExperiences = totalDays * experiencesPerDay;
-    
-//     if (experiences.length < requiredExperiences * 0.5) {
-//       // Warning: Not enough experiences for a full itinerary
-//       console.warn(`Only ${experiences.length} experiences found, but ${requiredExperiences} recommended for ${totalDays} days`);
-//     }
-
-//     // Step 2: Generate smart itinerary distribution with activity intensity
-//     const generatedItinerary = await smartItineraryGeneration({
-//       experiences,
-//       totalDays,
-//       experience_types,
-//       explore_time,
-//       travel_companion,
-//       activity_intensity,
-//       travel_distance,
-//       start_date 
-//     });
-
-//     const itineraryTitle = title || `${city || 'Adventure'} - ${startDate.format('MMM DD')} to ${endDate.format('MMM DD, YYYY')}`;
-
-//     // Create the itinerary object for preview/generation
-//     const previewItinerary = {
-//       // Use a temporary ID for preview (negative number to distinguish from real IDs)
-//       itinerary_id: -1,
-//       traveler_id,
-//       start_date,
-//       end_date,
-//       title: itineraryTitle,
-//       notes: notes || 'Auto-generated itinerary',
-//       created_at: dayjs().format('YYYY-MM-DD HH:mm:ss'),
-//       status: 'preview',
-//       // Add experience details to each item for preview
-//       items: await Promise.all(generatedItinerary.map(async (item) => {
-//         // Get experience details
-//         const [experienceRows] = await db.query(
-//           `SELECT e.*, d.name as destination_name, d.city as destination_city,
-//                   GROUP_CONCAT(ei.image_url) as images
-//            FROM experience e
-//            LEFT JOIN destination d ON e.destination_id = d.destination_id
-//            LEFT JOIN experience_images ei ON e.experience_id = ei.experience_id
-//            WHERE e.experience_id = ?
-//            GROUP BY e.experience_id`,
-//           [item.experience_id]
-//         );
-
-//         const experience = experienceRows[0];
-//         const images = experience.images ? experience.images.split(',') : [];
-
-//         return {
-//           experience_id: item.experience_id,
-//           day_number: item.day_number,
-//           start_time: item.start_time,
-//           end_time: item.end_time,
-//           custom_note: item.auto_note || '',
-//           experience_name: experience.title,
-//           experience_description: experience.description,
-//           destination_name: experience.destination_name,
-//           destination_city: experience.destination_city,
-//           images: images,
-//           primary_image: images[0] || null,
-//           price: experience.price,
-//           unit: experience.unit
-//         };
-//       }))
-//     };
-
-//     return res.status(200).json({ 
-//       message: 'Itinerary generated successfully',
-//       itinerary_id: -1, // Temporary ID for preview
-//       itineraries: [previewItinerary],
-//       total_experiences: experiences.length,
-//       selected_experiences: generatedItinerary.length,
-//       activity_intensity: activity_intensity,
-//       travel_distance: travel_distance,
-//       generated: true
-//     });
-
-//   } catch (err) {
-//     console.error('Error generating itinerary:', err);
-//     res.status(500).json({ error: 'Server error', details: err.message });
-//   }
-// };
-
+const normalizeCityName = (city) => {
+  if (!city) return city;
+  
+  // Replace underscores with spaces
+  let normalized = city.replace(/_/g, ' ');
+  
+  // Capitalize each word
+  normalized = normalized.replace(/\b\w/g, char => char.toUpperCase());
+  
+  // Handle common variations
+  if (!normalized.toLowerCase().includes('city')) {
+    normalized = normalized + ' City';
+  }
+  
+  return normalized;
+};
 const generateItinerary = async (req, res) => {
   const { 
     traveler_id, 
@@ -1107,349 +924,8 @@ const analyzeConflicts = (preferences) => {
 
   return conflicts;
 };
-// Corrected filtering function that properly joins with availability tables
-// const getFilteredExperiences = async ({
-//   city,
-//   experience_types,
-//   travel_companion,
-//   explore_time,
-//   budget,
-//   travel_distance, // New parameter
-//   start_date,
-//   end_date
-// }) => {
-//   try {
-//     console.log('Filtering experiences with params:', {
-//       city,
-//       experience_types,
-//       travel_companion,
-//       explore_time,
-//       budget,
-//       travel_distance // Log the new parameter
-//     });
 
-//     // Calculate trip day names for availability filtering
-//     let tripDayNames = [];
-//     if (start_date && end_date) {
-//       try {
-//         const [startYear, startMonth, startDay] = start_date.split('-');
-//         const [endYear, endMonth, endDay] = end_date.split('-');
-        
-//         const startDate = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseInt(startDay));
-//         const endDate = new Date(parseInt(endYear), parseInt(endMonth) - 1, parseInt(endDay));
-        
-//         const tripDaysOfWeek = [];
-//         const currentDate = new Date(startDate);
-        
-//         let dayCount = 0;
-//         const maxDays = 365;
-        
-//         while (currentDate <= endDate && dayCount < maxDays) {
-//           tripDaysOfWeek.push(currentDate.getDay());
-//           currentDate.setDate(currentDate.getDate() + 1);
-//           dayCount++;
-//         }
-        
-//         const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-//         tripDayNames = [...new Set(tripDaysOfWeek.map(dayNum => dayNames[dayNum]))];
-        
-//         console.log('Trip day names:', tripDayNames);
-        
-//       } catch (error) {
-//         console.error('Error calculating trip day names:', error);
-//         tripDayNames = [];
-//       }
-//     }
 
-//     // Build the main query with proper joins to availability tables
-//     let query = `
-//       SELECT DISTINCT
-//         e.experience_id,
-//         e.creator_id,
-//         e.destination_id,
-//         e.title,
-//         e.description,
-//         e.price,
-//         e.unit,
-//         e.status,
-//         e.travel_companion,
-//         e.created_at,
-//         d.name as destination_name,
-//         d.city,
-//         d.latitude,
-//         d.longitude,
-//         d.distance_from_city_center,
-//         GROUP_CONCAT(DISTINCT t.name) as tag_names,
-//         GROUP_CONCAT(DISTINCT t.tag_id) as tag_ids
-//       FROM experience e
-//       JOIN destination d ON e.destination_id = d.destination_id
-//       LEFT JOIN experience_tags et ON e.experience_id = et.experience_id
-//       LEFT JOIN tags t ON et.tag_id = t.tag_id
-//       WHERE e.status = 'active'
-//     `;
-
-//     const queryParams = [];
-
-//     // FIXED: Case-insensitive city center lookup
-//     let selectedCityCenter = null;
-//     if (city && city.trim()) {
-//       // Try exact match first, then case-insensitive variations
-//       const cityKey = city.trim();
-//       selectedCityCenter = CITY_CENTERS[cityKey] || 
-//                           CITY_CENTERS[cityKey.toLowerCase()] || 
-//                           CITY_CENTERS[cityKey.charAt(0).toUpperCase() + cityKey.slice(1).toLowerCase()];
-      
-//       if (!selectedCityCenter) {
-//         // Try all possible variations
-//         const cityVariations = [
-//           cityKey,
-//           cityKey.toLowerCase(), 
-//           cityKey.toUpperCase(),
-//           cityKey.charAt(0).toUpperCase() + cityKey.slice(1).toLowerCase(),
-//           // Handle common variations
-//           cityKey.replace(/\s+/g, ''), // Remove spaces
-//           cityKey.replace(/\s+/g, '').toLowerCase(),
-//           cityKey.replace(/\s+/g, '').charAt(0).toUpperCase() + cityKey.replace(/\s+/g, '').slice(1).toLowerCase()
-//         ];
-        
-//         for (const variation of cityVariations) {
-//           if (CITY_CENTERS[variation]) {
-//             selectedCityCenter = CITY_CENTERS[variation];
-//             console.log(`✅ Found city center using variation: "${variation}" for input: "${city}"`);
-//             break;
-//           }
-//         }
-//       } else {
-//         console.log(`✅ Found city center for "${city}":`, selectedCityCenter);
-//       }
-      
-//       if (!selectedCityCenter) {
-//         console.warn(`⚠️ No city center coordinates found for "${city}". Available cities:`, Object.keys(CITY_CENTERS).slice(0, 10));
-//         console.warn(`⚠️ Falling back to city-based filtering.`);
-//       }
-//     }
-
-//     if (selectedCityCenter && travel_distance) {
-//       // CROSS-CITY DISTANCE-BASED FILTERING
-//       const distanceMap = {
-//         'nearby': 10,    // ≤20km from selected city center (increased from 10)
-//         'moderate': 40,  // ≤40km from selected city center (increased from 20)
-//         'far': null      // All distances from selected city center
-//       };
-      
-//       const maxDistance = distanceMap[travel_distance.toLowerCase()];
-      
-//       if (maxDistance !== null && maxDistance !== undefined) {
-//         // Calculate distance from selected city center for each destination
-//         // Include destinations within the distance threshold regardless of their administrative city
-//         query += ` AND (
-//           d.distance_from_city_center IS NULL OR
-//           (6371 * acos(
-//             cos(radians(?)) * cos(radians(d.latitude)) * 
-//             cos(radians(d.longitude) - radians(?)) + 
-//             sin(radians(?)) * sin(radians(d.latitude))
-//           )) <= ?
-//         )`;
-        
-//         queryParams.push(
-//           selectedCityCenter.lat,   // Selected city center latitude
-//           selectedCityCenter.lng,   // Selected city center longitude  
-//           selectedCityCenter.lat,   // Selected city center latitude (for sin calculation)
-//           maxDistance               // Maximum distance
-//         );
-        
-//         console.log(`🌍 Applied cross-city distance filter: ${travel_distance} (≤${maxDistance}km from ${city} center)`);
-//         console.log(`📍 Using ${city} center coordinates: ${selectedCityCenter.lat}, ${selectedCityCenter.lng}`);
-        
-//       } else if (travel_distance.toLowerCase() === 'far') {
-//         // For "far": No distance restriction, but we can still log the city center being used
-//         console.log(`🌍 Applied cross-city distance filter: ${travel_distance} (no distance limit from ${city} center)`);
-//         console.log(`📍 Reference point: ${city} center coordinates: ${selectedCityCenter.lat}, ${selectedCityCenter.lng}`);
-//         // No additional filtering needed - all destinations included
-//       }
-      
-//     } else if (city && city.trim()) {
-//       // FALLBACK: Traditional city-based filtering if no city center coordinates or travel_distance
-//       query += ` AND LOWER(d.city) LIKE ?`;
-//       queryParams.push(`%${city.trim().toLowerCase()}%`);
-//       console.log(`🏙️ Applied traditional city-based filter: ${city} (administrative boundaries)`);
-      
-//       if (travel_distance) {
-//         console.warn(`⚠️ Travel distance preference "${travel_distance}" ignored due to missing city center coordinates`);
-//       }
-//     }
-
-//     // Filter by travel companion
-//     if (travel_companion && travel_companion !== 'Any') {
-//       query += ` AND LOWER(e.travel_companion) = LOWER(?)`;
-//       queryParams.push(travel_companion.trim());
-//     }
-
-//     // Filter by availability days - ensure experience has availability on trip days
-//     if (tripDayNames.length > 0) {
-//       query += ` AND e.experience_id IN (
-//         SELECT DISTINCT ea.experience_id 
-//         FROM experience_availability ea 
-//         WHERE ea.day_of_week IN (${tripDayNames.map(() => '?').join(',')})
-//       )`;
-//       queryParams.push(...tripDayNames);
-//     }
-
-//     // Filter by explore time using actual availability time slots
-//     if (explore_time && explore_time !== 'Both') {
-//       let timeCondition = '';
-//       switch (explore_time.toLowerCase()) {
-//         case 'daytime':
-//           timeCondition = 'HOUR(ats.start_time) >= 6 AND HOUR(ats.start_time) < 18';
-//           break;
-//         case 'nighttime':
-//           timeCondition = '(HOUR(ats.start_time) >= 18 OR HOUR(ats.start_time) < 6)';
-//           break;
-//       }
-      
-//       if (timeCondition) {
-//         query += ` AND e.experience_id IN (
-//           SELECT DISTINCT ea.experience_id 
-//           FROM experience_availability ea
-//           JOIN availability_time_slots ats ON ea.availability_id = ats.availability_id
-//           WHERE ${timeCondition}
-//         )`;
-//       }
-//     }
-
-//     // Filter by budget
-//     if (budget && budget !== 'Any') {
-//       switch (budget.toLowerCase()) {
-//         case 'free':
-//           query += ` AND e.price = 0`;
-//           break;
-//         case 'budget-friendly':
-//           query += ` AND e.price <= 500`;
-//           break;
-//         case 'mid-range':
-//           query += ` AND e.price <= 2000`;
-//           break;
-//         case 'premium':
-//           query += ` AND e.price > 2000`;
-//           break;
-//       }
-//     }
-
-//     // Group by to handle the aggregated fields
-//     query += ` GROUP BY e.experience_id, e.creator_id, e.destination_id, e.title, e.description, 
-//                e.price, e.unit, e.status, e.travel_companion, e.created_at,
-//                d.name, d.city, d.latitude, d.longitude, d.distance_from_city_center`;
-
-//     // Filter by experience types after grouping if provided
-//     if (experience_types && experience_types.length > 0) {
-//       query += ` HAVING (`;
-//       const tagConditions = experience_types.map((type, index) => {
-//         queryParams.push(`%${type}%`);
-//         return `tag_names LIKE ?`;
-//       });
-//       query += tagConditions.join(' OR ');
-//       query += `)`;
-//     }
-
-//     // Updated ordering logic for cross-city approach
-//     if (selectedCityCenter && travel_distance) {
-//       if (travel_distance.toLowerCase() === 'nearby') {
-//         // Nearby: Order by actual distance from selected city center (closest first)
-//         query += ` ORDER BY 
-//           (6371 * acos(
-//             cos(radians(${selectedCityCenter.lat})) * cos(radians(d.latitude)) * 
-//             cos(radians(d.longitude) - radians(${selectedCityCenter.lng})) + 
-//             sin(radians(${selectedCityCenter.lat})) * sin(radians(d.latitude))
-//           )) ASC, 
-//           e.created_at DESC`;
-//       } else if (travel_distance.toLowerCase() === 'moderate') {
-//         // Moderate: Balanced ordering with some preference for closer experiences
-//         query += ` ORDER BY 
-//           CASE 
-//             WHEN d.distance_from_city_center IS NULL THEN 1
-//             WHEN (6371 * acos(
-//               cos(radians(${selectedCityCenter.lat})) * cos(radians(d.latitude)) * 
-//               cos(radians(d.longitude) - radians(${selectedCityCenter.lng})) + 
-//               sin(radians(${selectedCityCenter.lat})) * sin(radians(d.latitude))
-//             )) <= 10 THEN 2
-//             ELSE 3
-//           END,
-//           e.created_at DESC`;
-//       } else {
-//         // Far: Mix variety with some recency
-//         query += ` ORDER BY e.created_at DESC`;
-//       }
-//     } else {
-//       // Fallback ordering
-//       query += ` ORDER BY e.created_at DESC`;
-//     }
-
-//     console.log('Generated Query:', query);
-//     console.log('Query Parameters:', queryParams);
-
-//     // Execute the main query
-//     const [experiences] = await db.query(query, queryParams);
-//     console.log('Initial experiences found:', experiences.length);
-
-//     // Add images and calculate actual distances from selected city center
-//     const processedExperiences = [];
-//     for (const experience of experiences) {
-//       const [images] = await db.query(`
-//         SELECT image_url FROM experience_images 
-//         WHERE experience_id = ? 
-//         LIMIT 1
-//       `, [experience.experience_id]);
-
-//       // Calculate actual distance from selected city center if available
-//       let actualDistanceFromSelectedCity = null;
-//       if (selectedCityCenter && experience.latitude && experience.longitude) {
-//         actualDistanceFromSelectedCity = calculateDistanceFromCityCenter(
-//           parseFloat(experience.latitude),
-//           parseFloat(experience.longitude),
-//           selectedCityCenter.lat,
-//           selectedCityCenter.lng
-//         );
-//         actualDistanceFromSelectedCity = Math.round(actualDistanceFromSelectedCity * 100) / 100;
-//       }
-
-//       processedExperiences.push({
-//         ...experience,
-//         tag_names: experience.tag_names ? experience.tag_names.split(',') : [],
-//         tag_ids: experience.tag_ids ? experience.tag_ids.split(',').map(Number) : [],
-//         image_url: images.length > 0 ? images[0].image_url : null,
-//         // Include both distance values for debugging/info
-//         distance_from_city_center: experience.distance_from_city_center, // Original (from destination's own city center)
-//         distance_from_selected_city: actualDistanceFromSelectedCity // New (from selected city center)
-//       });
-//     }
-
-//     console.log('Final processed experiences:', processedExperiences.length);
-//     console.log('Travel distance filter applied:', travel_distance);
-    
-//     // Debug: Show distance distribution from selected city center
-//     if (travel_distance && selectedCityCenter) {
-//       const distances = processedExperiences
-//         .map(exp => exp.distance_from_selected_city)
-//         .filter(d => d !== null)
-//         .sort((a, b) => a - b);
-      
-//       console.log(`📊 Distance distribution from ${city} center:`, {
-//         min: distances[0] || 'N/A',
-//         max: distances[distances.length - 1] || 'N/A',
-//         count_with_distance: distances.length,
-//         count_with_null: processedExperiences.length - distances.length,
-//         sample_distances: distances.slice(0, 5),
-//         cities_included: [...new Set(processedExperiences.map(exp => exp.city))]
-//       });
-//     }
-    
-//     return processedExperiences;
-
-//   } catch (error) {
-//     console.error('Error filtering experiences:', error);
-//     throw error;
-//   }
-// };
 const getFilteredExperiences = async ({
   city,
   experience_types,
@@ -1543,45 +1019,42 @@ const getFilteredExperiences = async ({
 
     const queryParams = [];
 
-    // FIXED: Case-insensitive city center lookup
-    let selectedCityCenter = null;
-    if (city && city.trim()) {
-      // Try exact match first, then case-insensitive variations
-      const cityKey = city.trim();
-      selectedCityCenter = CITY_CENTERS[cityKey] || 
-                          CITY_CENTERS[cityKey.toLowerCase()] || 
-                          CITY_CENTERS[cityKey.charAt(0).toUpperCase() + cityKey.slice(1).toLowerCase()];
-      
-      if (!selectedCityCenter) {
-        // Try all possible variations
-        const cityVariations = [
-          cityKey,
-          cityKey.toLowerCase(), 
-          cityKey.toUpperCase(),
-          cityKey.charAt(0).toUpperCase() + cityKey.slice(1).toLowerCase(),
-          // Handle common variations
-          cityKey.replace(/\s+/g, ''), // Remove spaces
-          cityKey.replace(/\s+/g, '').toLowerCase(),
-          cityKey.replace(/\s+/g, '').charAt(0).toUpperCase() + cityKey.replace(/\s+/g, '').slice(1).toLowerCase()
-        ];
-        
-        for (const variation of cityVariations) {
-          if (CITY_CENTERS[variation]) {
-            selectedCityCenter = CITY_CENTERS[variation];
-            console.log(`✅ Found city center using variation: "${variation}" for input: "${city}"`);
-            break;
-          }
-        }
-      } else {
-        console.log(`✅ Found city center for "${city}":`, selectedCityCenter);
-      }
-      
-      if (!selectedCityCenter) {
-        console.warn(`⚠️ No city center coordinates found for "${city}". Available cities:`, Object.keys(CITY_CENTERS).slice(0, 10));
-        console.warn(`⚠️ Falling back to city-based filtering.`);
+// FIXED: Case-insensitive city center lookup
+let selectedCityCenter = null;
+if (city && city.trim()) {
+  // Normalize the city name first
+  const normalizedCity = normalizeCityName(city.trim());
+  console.log(`Normalizing city name: "${city}" -> "${normalizedCity}"`);
+  
+  // Try exact match with normalized name
+  selectedCityCenter = CITY_CENTERS[normalizedCity];
+  
+  if (!selectedCityCenter) {
+    // Try various cases if exact match fails
+    const cityVariations = [
+      normalizedCity,
+      normalizedCity.toLowerCase(),
+      normalizedCity.toUpperCase(),
+      city.trim(), // Original input
+      city.trim().replace(/_/g, ' '), // Just replace underscores
+    ];
+    
+    for (const variation of cityVariations) {
+      if (CITY_CENTERS[variation]) {
+        selectedCityCenter = CITY_CENTERS[variation];
+        console.log(`✅ Found city center using variation: "${variation}" for input: "${city}"`);
+        break;
       }
     }
-
+  } else {
+    console.log(`✅ Found city center for "${normalizedCity}":`, selectedCityCenter);
+  }
+  
+  if (!selectedCityCenter) {
+    console.warn(`⚠️ No city center coordinates found for "${city}". Available cities:`, Object.keys(CITY_CENTERS).slice(0, 10));
+    console.warn(`⚠️ Falling back to city-based filtering.`);
+  }
+}
     if (selectedCityCenter && travel_distance) {
       // CROSS-CITY DISTANCE-BASED FILTERING
       const distanceMap = {
@@ -1621,17 +1094,18 @@ const getFilteredExperiences = async ({
         // No additional filtering needed - all destinations included
       }
       
-    } else if (city && city.trim()) {
-      // FALLBACK: Traditional city-based filtering if no city center coordinates or travel_distance
-      query += ` AND LOWER(d.city) LIKE ?`;
-      queryParams.push(`%${city.trim().toLowerCase()}%`);
-      console.log(`🏙️ Applied traditional city-based filter: ${city} (administrative boundaries)`);
-      
-      if (travel_distance) {
-        console.warn(`⚠️ Travel distance preference "${travel_distance}" ignored due to missing city center coordinates`);
-      }
-    }
-
+   } else if (city && city.trim()) {
+  // FALLBACK: Traditional city-based filtering if no city center coordinates or travel_distance
+  // Handle both underscore and space formats
+  const cityPattern = city.trim().toLowerCase().replace(/_/g, '%');
+  query += ` AND (LOWER(d.city) LIKE ? OR LOWER(REPLACE(d.city, ' ', '_')) LIKE ?)`;
+  queryParams.push(`%${cityPattern}%`, `%${city.trim().toLowerCase()}%`);
+  console.log(`🏙️ Applied traditional city-based filter: ${city} (administrative boundaries)`);
+  
+  if (travel_distance) {
+    console.warn(`⚠️ Travel distance preference "${travel_distance}" ignored due to missing city center coordinates`);
+  }
+}
     // Filter by travel companion - Updated to support multiple companions
     if (companionsToFilter.length > 0 && !companionsToFilter.includes('Any')) {
       // Build condition for multiple companions using JSON_CONTAINS
