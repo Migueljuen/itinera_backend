@@ -317,10 +317,11 @@ const saveItinerary = async (req, res) => {
 
       // Create trip reminder notifications
       const tripStartDate = dayjs(start_date);
+      const now = dayjs();
       
       // 3 days before reminder
-      const threeDaysBefore = tripStartDate.subtract(3, 'day');
-      if (threeDaysBefore.isAfter(dayjs())) {
+      const threeDaysBefore = tripStartDate.subtract(3, 'day').hour(9).minute(0).second(0);
+      if (threeDaysBefore.isAfter(now)) {
         await notificationService.createScheduledNotification({
           user_id: traveler_id,
           type: 'reminder',
@@ -329,14 +330,14 @@ const saveItinerary = async (req, res) => {
           itinerary_id: itinerary_id,
           icon: 'calendar',
           icon_color: '#3B82F6',
-          scheduled_for: threeDaysBefore.format('YYYY-MM-DD 09:00:00'), // 9 AM
-          created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
+          scheduled_for: threeDaysBefore.format('YYYY-MM-DD HH:mm:ss'),
+          created_at: now.format('YYYY-MM-DD HH:mm:ss')
         });
       }
 
       // 1 day before reminder
-      const oneDayBefore = tripStartDate.subtract(1, 'day');
-      if (oneDayBefore.isAfter(dayjs())) {
+      const oneDayBefore = tripStartDate.subtract(1, 'day').hour(18).minute(0).second(0);
+      if (oneDayBefore.isAfter(now)) {
         await notificationService.createScheduledNotification({
           user_id: traveler_id,
           type: 'reminder',
@@ -345,8 +346,8 @@ const saveItinerary = async (req, res) => {
           itinerary_id: itinerary_id,
           icon: 'airplane',
           icon_color: '#4F46E5',
-          scheduled_for: oneDayBefore.format('YYYY-MM-DD 18:00:00'), // 6 PM
-          created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
+          scheduled_for: oneDayBefore.format('YYYY-MM-DD HH:mm:ss'),
+          created_at: now.format('YYYY-MM-DD HH:mm:ss')
         });
       }
 
@@ -364,9 +365,9 @@ const saveItinerary = async (req, res) => {
         // Create notifications for each day's activities
         for (const [dayNumber, dayItems] of Object.entries(itemsByDay)) {
           const activityDate = tripStartDate.add(parseInt(dayNumber) - 1, 'day');
-          const dayBefore = activityDate.subtract(1, 'day');
+          const dayBeforeAt7PM = activityDate.subtract(1, 'day').hour(19).minute(0).second(0);
           
-          if (dayBefore.isAfter(dayjs()) && dayItems.length > 0) {
+          if (dayBeforeAt7PM.isAfter(now) && dayItems.length > 0) {
             // Get experience details for the notification
             const firstActivity = await getExperienceDetails(dayItems[0].experience_id);
             const activityCount = dayItems.length;
@@ -381,26 +382,140 @@ const saveItinerary = async (req, res) => {
               itinerary_id: itinerary_id,
               icon: 'location',
               icon_color: '#F59E0B',
-              scheduled_for: dayBefore.format('YYYY-MM-DD 19:00:00'), // 7 PM
-              created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
+              scheduled_for: dayBeforeAt7PM.format('YYYY-MM-DD HH:mm:ss'),
+              created_at: now.format('YYYY-MM-DD HH:mm:ss')
             });
           }
         }
       }
 
-      // Day of trip notification
-      if (tripStartDate.isAfter(dayjs())) {
+      // FIXED: Day of trip notification with smart timing
+      // Find the earliest activity on the first day
+      const firstDayItems = items.filter(item => item.day_number === 1);
+      let notificationHour = 6; // Default to 6 AM
+      let notificationMinute = 0;
+      
+      if (firstDayItems.length > 0) {
+        // Sort by start time and get the earliest
+        const earliestItem = firstDayItems.sort((a, b) => a.start_time.localeCompare(b.start_time))[0];
+        const [earliestHour, earliestMinute] = earliestItem.start_time.split(':').map(Number);
+        
+        // Decision logic for notification timing
+        if (earliestHour < 6) {
+          // Very early activity - send at midnight
+          notificationHour = 0;
+          notificationMinute = 0;
+        } else if (earliestHour < 8) {
+          // Early morning activity - send 1.5 hours before
+          const totalMinutes = (earliestHour * 60 + earliestMinute) - 90;
+          notificationHour = Math.floor(totalMinutes / 60);
+          notificationMinute = totalMinutes % 60;
+        }
+        // For activities at 8 AM or later, stick with 6 AM default
+      }
+      
+      const tripStartNotificationTime = tripStartDate
+        .hour(notificationHour)
+        .minute(notificationMinute)
+        .second(0);
+      
+      // Add description about first activity timing
+      const notificationDescription = firstDayItems.length > 0 && notificationHour === 0
+        ? `Your ${title} trip begins today. First activity starts at ${firstDayItems[0].start_time} - have an amazing time!`
+        : `Your ${title} trip begins today. Have an amazing time!`;
+      
+      if (tripStartNotificationTime.isAfter(now)) {
+        // Schedule for future
         await notificationService.createScheduledNotification({
           user_id: traveler_id,
           type: 'alert',
           title: `Welcome to Your Adventure!`,
-          description: `Your ${title} trip begins today. Have an amazing time!`,
+          description: notificationDescription,
           itinerary_id: itinerary_id,
           icon: 'rocket',
           icon_color: '#10B981',
-          scheduled_for: tripStartDate.format('YYYY-MM-DD 07:00:00'), // 7 AM
-          created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
+          scheduled_for: tripStartNotificationTime.format('YYYY-MM-DD HH:mm:ss'),
+          created_at: now.format('YYYY-MM-DD HH:mm:ss')
         });
+      } else if (now.isSame(tripStartDate, 'day')) {
+        // It's the trip day - send immediately if we're past the notification time
+        if (now.isAfter(tripStartNotificationTime)) {
+          // Check if we already sent this notification today
+          const [existingNotifications] = await db.query(
+            `SELECT id FROM notifications 
+             WHERE user_id = ? 
+             AND itinerary_id = ? 
+             AND title = ? 
+             AND DATE(created_at) = ?
+             LIMIT 1`,
+            [traveler_id, itinerary_id, 'Welcome to Your Adventure!', tripStartDate.format('YYYY-MM-DD')]
+          );
+          
+          if (existingNotifications.length === 0) {
+            // Send immediately since we're past the scheduled time
+            await notificationService.createNotification({
+              user_id: traveler_id,
+              type: 'alert',
+              title: `Welcome to Your Adventure!`,
+              description: notificationDescription,
+              itinerary_id: itinerary_id,
+              icon: 'rocket',
+              icon_color: '#10B981',
+              created_at: now.format('YYYY-MM-DD HH:mm:ss')
+            });
+          }
+        } else {
+          // It's before notification time on trip day - schedule for calculated time
+          await notificationService.createScheduledNotification({
+            user_id: traveler_id,
+            type: 'alert',
+            title: `Welcome to Your Adventure!`,
+            description: notificationDescription,
+            itinerary_id: itinerary_id,
+            icon: 'rocket',
+            icon_color: '#10B981',
+            scheduled_for: tripStartNotificationTime.format('YYYY-MM-DD HH:mm:ss'),
+            created_at: now.format('YYYY-MM-DD HH:mm:ss')
+          });
+        }
+      }
+      // If the trip start date is in the past, we don't create this notification
+
+      // ADDITIONAL FIX: Handle missed notifications for trips starting today
+      // This handles the edge case where someone creates an itinerary on the same day it starts
+      if (now.isSame(tripStartDate, 'day')) {
+        // Check and send any missed "day before" notifications for today's activities
+        const todayItems = items.filter(item => item.day_number === 1);
+        if (todayItems.length > 0 && now.hour() < 23) { // Still time to enjoy activities
+          const firstActivity = await getExperienceDetails(todayItems[0].experience_id);
+          const activityCount = todayItems.length;
+          
+          // Check if we already sent this notification
+          const [existingActivityNotifications] = await db.query(
+            `SELECT id FROM notifications 
+             WHERE user_id = ? 
+             AND itinerary_id = ? 
+             AND type = 'activity'
+             AND DATE(created_at) = ?
+             LIMIT 1`,
+            [traveler_id, itinerary_id, now.format('YYYY-MM-DD')]
+          );
+          
+          if (existingActivityNotifications.length === 0) {
+            await notificationService.createNotification({
+              user_id: traveler_id,
+              type: 'activity',
+              title: `Today's Activities`,
+              description: activityCount === 1 
+                ? `${firstActivity?.title || 'Your activity'} starts at ${todayItems[0].start_time}`
+                : `${activityCount} activities planned today, starting with ${firstActivity?.title || 'your first activity'} at ${todayItems[0].start_time}`,
+              itinerary_id: itinerary_id,
+              icon: 'location',
+              icon_color: '#F59E0B',
+              created_at: now.format('YYYY-MM-DD HH:mm:ss')
+            });
+          }
+        }
       }
 
     } catch (notificationError) {
@@ -420,7 +535,6 @@ const saveItinerary = async (req, res) => {
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
-
 // Helper function to get destination info
 const getDestinationInfo = async (itinerary) => {
   try {
