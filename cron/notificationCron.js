@@ -1,6 +1,12 @@
 // cron/notificationCron.js
 const cron = require('node-cron');
 const db = require('../config/db.js');
+const dayjs = require('dayjs');
+const timezone = require('dayjs/plugin/timezone');
+const utc = require('dayjs/plugin/utc');
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 // Start notification processing cron job
 const startNotificationCron = () => {
@@ -20,36 +26,37 @@ const startNotificationCron = () => {
   console.log('✅ Notification cron job started');
 };
 
-// Process scheduled notifications
+// Process scheduled notifications WITH TIMEZONE SUPPORT
 const processScheduledNotifications = async () => {
   try {
-    // Get all pending notifications that are due to be sent from scheduled_notifications table
+    // Get all pending notifications with user timezone info
     const [pendingNotifications] = await db.query(`
       SELECT 
-        id,
-        user_id,
-        type,
-        title,
-        description,
-        scheduled_for,
-        created_at,
-        itinerary_id,
-        itinerary_item_id,
-        experience_id,
-        icon,
-        icon_color,
-        DATE_FORMAT(scheduled_for, '%Y-%m-%d %H:%i:%s') as formatted_scheduled
-      FROM scheduled_notifications 
-      WHERE is_sent = 0 
-        AND is_cancelled = 0
-        AND scheduled_for <= NOW()
-      ORDER BY scheduled_for ASC
+        sn.id,
+        sn.user_id,
+        sn.type,
+        sn.title,
+        sn.description,
+        sn.scheduled_for,
+        sn.created_at,
+        sn.itinerary_id,
+        sn.itinerary_item_id,
+        sn.experience_id,
+        sn.icon,
+        sn.icon_color,
+        DATE_FORMAT(sn.scheduled_for, '%Y-%m-%d %H:%i:%s') as formatted_scheduled,
+        COALESCE(u.timezone, 'UTC') as user_timezone
+      FROM scheduled_notifications sn
+      JOIN users u ON sn.user_id = u.id
+      WHERE sn.is_sent = 0 
+        AND sn.is_cancelled = 0
+      ORDER BY sn.scheduled_for ASC
     `);
 
-    console.log(`📋 Found ${pendingNotifications.length} pending notifications to process`);
+    console.log(`📋 Found ${pendingNotifications.length} total notifications to check`);
 
     if (pendingNotifications.length === 0) {
-      console.log('✅ No pending notifications to process');
+      console.log('✅ No notifications to check');
       return {
         processed: 0,
         failed: 0,
@@ -59,14 +66,33 @@ const processScheduledNotifications = async () => {
 
     let processed = 0;
     let failed = 0;
+    const notificationsToProcess = [];
 
-    // Process each notification
+    // Check each notification against user's local time
     for (const notification of pendingNotifications) {
+      const userNow = dayjs().tz(notification.user_timezone);
+      const scheduledTime = dayjs.tz(notification.scheduled_for, notification.user_timezone);
+      
+      console.log(`🔍 Checking notification ${notification.id}:`);
+      console.log(`   User timezone: ${notification.user_timezone}`);
+      console.log(`   User's current time: ${userNow.format('YYYY-MM-DD HH:mm:ss')}`);
+      console.log(`   Scheduled for: ${scheduledTime.format('YYYY-MM-DD HH:mm:ss')}`);
+      console.log(`   Should send: ${userNow.isAfter(scheduledTime) ? 'YES' : 'NO'}`);
+      
+      if (userNow.isAfter(scheduledTime) || userNow.isSame(scheduledTime, 'minute')) {
+        notificationsToProcess.push(notification);
+      }
+    }
+
+    console.log(`📤 ${notificationsToProcess.length} notifications ready to send`);
+
+    // Process each notification that's due
+    for (const notification of notificationsToProcess) {
       try {
         console.log(`📤 Processing notification ${notification.id} for user ${notification.user_id}`);
         console.log(`   Type: ${notification.type}`);
         console.log(`   Title: ${notification.title}`);
-        console.log(`   Scheduled for: ${notification.formatted_scheduled}`);
+        console.log(`   User timezone: ${notification.user_timezone}`);
 
         // Move notification from scheduled_notifications to notifications table
         await db.query(`
@@ -95,12 +121,6 @@ const processScheduledNotifications = async () => {
           WHERE id = ?
         `, [notification.id]);
 
-        // You can add additional processing here like:
-        // - Send push notifications
-        // - Send emails
-        // - Trigger real-time updates
-        // - Log to external services
-
         console.log(`✅ Successfully processed notification ${notification.id}`);
         processed++;
 
@@ -113,13 +133,14 @@ const processScheduledNotifications = async () => {
     const result = {
       processed,
       failed,
-      total: pendingNotifications.length
+      total: notificationsToProcess.length,
+      checked: pendingNotifications.length
     };
 
     console.log(`📊 Notification processing complete:
+      - ${result.checked} notifications checked
       - ${result.processed} notifications sent
-      - ${result.failed} notifications failed
-      - ${result.total} total processed`);
+      - ${result.failed} notifications failed`);
 
     return result;
 
@@ -134,54 +155,47 @@ const processNow = async () => {
   console.log('🧪 Manual notification processing started...');
   
   try {
-    // Show current notification stats for both tables
-    const [scheduledStats] = await db.query(`
-      SELECT 
-        CASE 
-          WHEN is_sent = 1 THEN 'sent'
-          WHEN is_cancelled = 1 THEN 'cancelled'
-          ELSE 'pending'
-        END as status,
-        COUNT(*) as count,
-        MIN(scheduled_for) as earliest_scheduled,
-        MAX(scheduled_for) as latest_scheduled
-      FROM scheduled_notifications 
-      GROUP BY is_sent, is_cancelled
-      ORDER BY is_sent, is_cancelled
+    // Show current server time and timezone
+    console.log(`🕐 Server time: ${new Date().toISOString()}`);
+    console.log(`🕐 Server timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}`);
+    
+    // Show user timezones
+    const [userTimezones] = await db.query(`
+      SELECT DISTINCT timezone, COUNT(*) as user_count 
+      FROM users 
+      WHERE timezone IS NOT NULL 
+      GROUP BY timezone
     `);
-
-    const [immediateStats] = await db.query(`
+    
+    console.log('🌍 User timezones:');
+    userTimezones.forEach(tz => {
+      const localTime = dayjs().tz(tz.timezone).format('YYYY-MM-DD HH:mm:ss');
+      console.log(`   ${tz.timezone}: ${tz.user_count} users (local time: ${localTime})`);
+    });
+    
+    // Show upcoming notifications by timezone
+    const [upcomingByTimezone] = await db.query(`
       SELECT 
-        CASE 
-          WHEN is_read = 1 THEN 'read'
-          ELSE 'unread'
-        END as status,
-        COUNT(*) as count,
-        MIN(created_at) as earliest_created,
-        MAX(created_at) as latest_created
-      FROM notifications 
-      GROUP BY is_read
-      ORDER BY is_read
+        u.timezone,
+        COUNT(*) as notification_count,
+        MIN(sn.scheduled_for) as next_notification
+      FROM scheduled_notifications sn
+      JOIN users u ON sn.user_id = u.id
+      WHERE sn.is_sent = 0 AND sn.is_cancelled = 0
+      GROUP BY u.timezone
+      ORDER BY u.timezone
     `);
-
-    console.log('📊 Current scheduled notification statistics:');
-    scheduledStats.forEach(stat => {
-      console.log(`   ${stat.status}: ${stat.count} notifications`);
-      if (stat.earliest_scheduled) {
-        console.log(`     Earliest: ${stat.earliest_scheduled}`);
-        console.log(`     Latest: ${stat.latest_scheduled}`);
-      }
+    
+    console.log('\n📅 Upcoming notifications by timezone:');
+    upcomingByTimezone.forEach(tz => {
+      const userNow = dayjs().tz(tz.timezone || 'UTC');
+      const nextTime = dayjs.tz(tz.next_notification, tz.timezone || 'UTC');
+      const minutesUntil = nextTime.diff(userNow, 'minute');
+      
+      console.log(`   ${tz.timezone || 'UTC'}: ${tz.notification_count} pending`);
+      console.log(`     Next in ${minutesUntil} minutes (${nextTime.format('HH:mm')})`);
     });
-
-    console.log('📊 Current immediate notification statistics:');
-    immediateStats.forEach(stat => {
-      console.log(`   ${stat.status}: ${stat.count} notifications`);
-      if (stat.earliest_created) {
-        console.log(`     Earliest: ${stat.earliest_created}`);
-        console.log(`     Latest: ${stat.latest_created}`);
-      }
-    });
-
+    
     // Process the notifications
     const result = await processScheduledNotifications();
     
