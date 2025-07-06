@@ -1,5 +1,10 @@
 // services/notificationService.js
 const dayjs = require('dayjs');
+const timezone = require('dayjs/plugin/timezone');
+const utc = require('dayjs/plugin/utc');
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 class NotificationService {
   constructor(db) {
@@ -65,7 +70,7 @@ class NotificationService {
     }
   }
 
-  // Create scheduled notification (for future delivery)
+  // Create scheduled notification WITH TIMEZONE SUPPORT
   async createScheduledNotification(data) {
     try {
       const {
@@ -82,19 +87,33 @@ class NotificationService {
         created_at
       } = data;
 
+      // Get user's timezone
+      const [user] = await this.db.query(
+        'SELECT timezone FROM users WHERE id = ?',
+        [user_id]
+      );
+      const userTimezone = user[0]?.timezone || 'UTC';
+
+      // scheduled_for should be in user's local time
+      // Store both local and UTC times for clarity
+      const scheduledLocal = dayjs.tz(scheduled_for, userTimezone);
+      const scheduledUTC = scheduledLocal.utc().format('YYYY-MM-DD HH:mm:ss');
+
       // Store in a scheduled notifications table
       const [result] = await this.db.query(
         `INSERT INTO scheduled_notifications 
-          (user_id, type, title, description, scheduled_for, is_sent, created_at,
-           itinerary_id, itinerary_item_id, experience_id, 
-           icon, icon_color)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (user_id, type, title, description, scheduled_for, scheduled_for_utc, 
+           user_timezone, is_sent, created_at, itinerary_id, itinerary_item_id, 
+           experience_id, icon, icon_color)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           user_id,
           type,
           title,
           description,
-          scheduled_for,
+          scheduled_for, // Keep local time for reference
+          scheduledUTC,  // UTC time for comparison
+          userTimezone,
           false, // is_sent defaults to false
           created_at || dayjs().format('YYYY-MM-DD HH:mm:ss'),
           itinerary_id || null,
@@ -104,6 +123,11 @@ class NotificationService {
           icon_color || this.getDefaultColor(type)
         ]
       );
+
+      console.log(`📅 Scheduled notification for user ${user_id}:`);
+      console.log(`   Local time: ${scheduled_for} (${userTimezone})`);
+      console.log(`   UTC time: ${scheduledUTC}`);
+      console.log(`   Type: ${type}, Title: ${title}`);
 
       return { success: true, scheduledNotificationId: result.insertId };
     } catch (error) {
@@ -133,23 +157,46 @@ class NotificationService {
     }
   }
 
-  // Process scheduled notifications (run this via cron job)
+  // Process scheduled notifications WITH TIMEZONE SUPPORT
   async processScheduledNotifications() {
     try {
-      const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
+      const nowUTC = dayjs().utc().format('YYYY-MM-DD HH:mm:ss');
       
       // Get all pending scheduled notifications
+      // Now we check against UTC time for consistency
       const [notifications] = await this.db.query(
-        `SELECT * FROM scheduled_notifications 
-         WHERE is_sent = false 
-           AND is_cancelled = false 
-           AND scheduled_for <= ?
-         ORDER BY scheduled_for ASC
-         LIMIT 100`,
-        [now]
+        `SELECT sn.*, u.timezone as current_user_timezone
+         FROM scheduled_notifications sn
+         JOIN users u ON sn.user_id = u.id
+         WHERE sn.is_sent = false 
+           AND sn.is_cancelled = false 
+         ORDER BY sn.scheduled_for_utc ASC
+         LIMIT 100`
       );
 
+      console.log(`🔍 Found ${notifications.length} notifications to check`);
+
+      const notificationsToSend = [];
+
+      // Check each notification against user's current time
       for (const notification of notifications) {
+        const userTimezone = notification.current_user_timezone || notification.user_timezone || 'UTC';
+        const userNow = dayjs().tz(userTimezone);
+        const scheduledTime = dayjs.tz(notification.scheduled_for, userTimezone);
+        
+        // Check if it's time to send in user's timezone
+        if (userNow.isAfter(scheduledTime) || userNow.isSame(scheduledTime, 'minute')) {
+          notificationsToSend.push(notification);
+          console.log(`✅ Ready to send: ${notification.title} for user ${notification.user_id}`);
+        } else {
+          const minutesUntil = scheduledTime.diff(userNow, 'minute');
+          console.log(`⏰ Not yet: ${notification.title} - ${minutesUntil} minutes remaining`);
+        }
+      }
+
+      console.log(`📤 Sending ${notificationsToSend.length} notifications`);
+
+      for (const notification of notificationsToSend) {
         try {
           // Create the actual notification
           await this.createNotification({
@@ -177,11 +224,71 @@ class NotificationService {
         }
       }
 
-      return { success: true, processed: notifications.length };
+      return { 
+        success: true, 
+        checked: notifications.length,
+        processed: notificationsToSend.length 
+      };
     } catch (error) {
       console.error('Error processing scheduled notifications:', error);
       throw error;
     }
+  }
+
+  // Get user notifications with timezone-aware timestamps
+  async getUserNotifications(userId, limit = 50) {
+    try {
+      // Get user's timezone
+      const [user] = await this.db.query(
+        'SELECT timezone FROM users WHERE id = ?',
+        [userId]
+      );
+      const userTimezone = user[0]?.timezone || 'UTC';
+
+      const [notifications] = await this.db.query(
+        `SELECT 
+          id,
+          type,
+          title,
+          description,
+          is_read,
+          created_at,
+          CONVERT_TZ(created_at, @@session.time_zone, ?) as local_created_at,
+          itinerary_id,
+          icon,
+          icon_color,
+          action_url
+         FROM notifications 
+         WHERE user_id = ?
+         ORDER BY created_at DESC
+         LIMIT ?`,
+        [userTimezone, userId, limit]
+      );
+
+      // Format timestamps for display
+      return notifications.map(notif => ({
+        ...notif,
+        formatted_time: dayjs(notif.created_at).tz(userTimezone).format('MMM D, h:mm A'),
+        relative_time: this.getRelativeTime(notif.created_at, userTimezone)
+      }));
+    } catch (error) {
+      console.error('Error getting user notifications:', error);
+      throw error;
+    }
+  }
+
+  // Helper to get relative time (e.g., "2 hours ago")
+  getRelativeTime(timestamp, timezone) {
+    const userNow = dayjs().tz(timezone);
+    const notifTime = dayjs(timestamp).tz(timezone);
+    const diffMinutes = userNow.diff(notifTime, 'minute');
+    
+    if (diffMinutes < 1) return 'Just now';
+    if (diffMinutes < 60) return `${diffMinutes} min ago`;
+    if (diffMinutes < 1440) return `${Math.floor(diffMinutes / 60)} hours ago`;
+    if (diffMinutes < 10080) return `${Math.floor(diffMinutes / 1440)} days ago`;
+    
+    return notifTime.format('MMM D');
   }
 
   // Helper methods
@@ -233,6 +340,55 @@ class NotificationService {
     } catch (error) {
       console.error('Error sending push notification:', error);
       // Don't throw - push notification failure shouldn't break the flow
+    }
+  }
+
+  // Debug method to check notification scheduling
+  async debugUserNotifications(userId) {
+    try {
+      const [user] = await this.db.query(
+        'SELECT id, email, timezone FROM users WHERE id = ?',
+        [userId]
+      );
+      
+      const [scheduled] = await this.db.query(
+        `SELECT 
+          type,
+          title,
+          scheduled_for,
+          scheduled_for_utc,
+          user_timezone,
+          is_sent,
+          is_cancelled
+         FROM scheduled_notifications
+         WHERE user_id = ?
+         ORDER BY scheduled_for DESC
+         LIMIT 10`,
+        [userId]
+      );
+
+      const userTimezone = user[0]?.timezone || 'UTC';
+      const userNow = dayjs().tz(userTimezone);
+
+      console.log(`\n🔍 Debug info for user ${userId}:`);
+      console.log(`   Email: ${user[0]?.email}`);
+      console.log(`   Timezone: ${userTimezone}`);
+      console.log(`   Current time: ${userNow.format('YYYY-MM-DD HH:mm:ss')}`);
+      console.log(`\n📅 Scheduled notifications:`);
+      
+      scheduled.forEach(notif => {
+        const scheduledTime = dayjs.tz(notif.scheduled_for, userTimezone);
+        const status = notif.is_sent ? '✅ Sent' : notif.is_cancelled ? '❌ Cancelled' : '⏰ Pending';
+        const timeUntil = scheduledTime.diff(userNow, 'minute');
+        
+        console.log(`   ${status} ${notif.title}`);
+        console.log(`      Scheduled: ${scheduledTime.format('YYYY-MM-DD HH:mm')}`);
+        if (!notif.is_sent && !notif.is_cancelled) {
+          console.log(`      Time until: ${timeUntil > 0 ? `${timeUntil} minutes` : 'Should have been sent'}`);
+        }
+      });
+    } catch (error) {
+      console.error('Error in debug:', error);
     }
   }
 }

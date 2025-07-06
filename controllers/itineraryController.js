@@ -213,17 +213,32 @@ const updateItineraryStatuses = async () => {
     // STEP 1: Update to 'ongoing' - itineraries that have started but not ended
     // First, get the itineraries that will be updated (for notifications)
     const [itinerariesToStart] = await db.query(`
-      SELECT itinerary_id, traveler_id, title, start_date
-      FROM itinerary 
-      WHERE start_date <= ? 
-        AND end_date >= ? 
-        AND status = 'upcoming'
+      SELECT i.itinerary_id, i.traveler_id, i.title, i.start_date,
+             -- Check if welcome notification was already sent
+             (SELECT COUNT(*) FROM notifications n 
+              WHERE n.user_id = i.traveler_id 
+                AND n.itinerary_id = i.itinerary_id 
+                AND n.type = 'alert' 
+                AND n.title = 'Welcome to Your Adventure!'
+                AND DATE(n.created_at) = i.start_date) as welcome_sent,
+             -- Check if activities notification was already sent  
+             (SELECT COUNT(*) FROM notifications n 
+              WHERE n.user_id = i.traveler_id 
+                AND n.itinerary_id = i.itinerary_id 
+                AND n.type = 'reminder' 
+                AND n.title = 'Today\\'s Activities'
+                AND DATE(n.created_at) = i.start_date) as activities_sent
+      FROM itinerary i
+      WHERE i.start_date <= ? 
+        AND i.end_date >= ? 
+        AND i.status = 'upcoming'
     `, [currentDate, currentDate]);
     
     // Update the statuses
     const [ongoingResult] = await db.query(`
       UPDATE itinerary 
-      SET status = 'ongoing' 
+      SET status = 'ongoing',
+          updated_at = NOW() 
       WHERE start_date <= ? 
         AND end_date >= ? 
         AND status = 'upcoming'
@@ -231,20 +246,11 @@ const updateItineraryStatuses = async () => {
     
     console.log(`✅ Updated ${ongoingResult.affectedRows} itineraries to 'ongoing'`);
     
-    // Send notifications for newly started trips (only for itineraries that just changed status)
+    // Send notifications for newly started trips
     for (const itinerary of itinerariesToStart) {
       try {
-        // Check if we already sent a "trip started" notification for this itinerary today
-        const [existingWelcome] = await db.query(`
-          SELECT id FROM notifications 
-          WHERE user_id = ? 
-            AND itinerary_id = ? 
-            AND type = 'alert' 
-            AND title = 'Welcome to Your Adventure!'
-            AND DATE(created_at) = CURDATE()
-        `, [itinerary.traveler_id, itinerary.itinerary_id]);
-        
-        if (existingWelcome.length === 0) {
+        // Send welcome notification if not already sent
+        if (itinerary.welcome_sent === 0) {
           await notificationService.createNotification({
             user_id: itinerary.traveler_id,
             type: 'alert',
@@ -258,23 +264,16 @@ const updateItineraryStatuses = async () => {
           
           console.log(`📧 Sent welcome notification for itinerary ${itinerary.itinerary_id}`);
         } else {
-          console.log(`⏭️ Welcome notification already sent for itinerary ${itinerary.itinerary_id} today`);
+          console.log(`⏭️ Welcome notification already sent for itinerary ${itinerary.itinerary_id}`);
         }
         
-        // Check for today's activities notification
-        const [existingActivities] = await db.query(`
-          SELECT id FROM notifications 
-          WHERE user_id = ? 
-            AND itinerary_id = ? 
-            AND type = 'reminder' 
-            AND title = 'Today\'s Activities'
-            AND DATE(created_at) = CURDATE()
-        `, [itinerary.traveler_id, itinerary.itinerary_id]);
-        
-        if (existingActivities.length === 0) {
-          // Also create a notification for the first day's activities
+        // Send activities notification if not already sent
+        if (itinerary.activities_sent === 0) {
+          // Get today's activities
           const [firstDayActivities] = await db.query(`
-            SELECT COUNT(*) as activity_count, MIN(start_time) as first_activity_time
+            SELECT COUNT(*) as activity_count, 
+                   MIN(start_time) as first_activity_time,
+                   GROUP_CONCAT(experience_id) as experience_ids
             FROM itinerary_items
             WHERE itinerary_id = ? AND day_number = 1
           `, [itinerary.itinerary_id]);
@@ -284,7 +283,7 @@ const updateItineraryStatuses = async () => {
               user_id: itinerary.traveler_id,
               type: 'reminder',
               title: `Today's Activities`,
-              description: `You have ${firstDayActivities[0].activity_count} activities planned today, starting at ${formatTime(firstDayActivities[0].first_activity_time)}`,
+              description: `You have ${firstDayActivities[0].activity_count} ${firstDayActivities[0].activity_count === 1 ? 'activity' : 'activities'} planned today, starting at ${formatTime(firstDayActivities[0].first_activity_time)}`,
               itinerary_id: itinerary.itinerary_id,
               icon: 'calendar',
               icon_color: '#10B981',
@@ -294,7 +293,7 @@ const updateItineraryStatuses = async () => {
             console.log(`📧 Sent activities notification for itinerary ${itinerary.itinerary_id}`);
           }
         } else {
-          console.log(`⏭️ Activities notification already sent for itinerary ${itinerary.itinerary_id} today`);
+          console.log(`⏭️ Activities notification already sent for itinerary ${itinerary.itinerary_id}`);
         }
         
       } catch (notifError) {
@@ -309,7 +308,13 @@ const updateItineraryStatuses = async () => {
                DATE_ADD(i.start_date, INTERVAL (ii.day_number - 1) DAY), 
                ' ', 
                ii.end_time
-             )) as last_activity_end_datetime
+             )) as last_activity_end_datetime,
+             -- Check if completion notification was already sent
+             (SELECT COUNT(*) FROM notifications n 
+              WHERE n.user_id = i.traveler_id 
+                AND n.itinerary_id = i.itinerary_id 
+                AND n.type = 'reminder' 
+                AND n.title = 'Trip Completed!') as completion_sent
       FROM itinerary i
       JOIN itinerary_items ii ON i.itinerary_id = ii.itinerary_id
       WHERE i.status IN ('upcoming', 'ongoing')
@@ -330,21 +335,13 @@ const updateItineraryStatuses = async () => {
         WHERE itinerary_id IN (${itineraryIds.map(() => '?').join(',')})
       `, itineraryIds);
       
-      // Send completion notifications (with duplicate prevention)
+      // Send completion notifications
       for (const item of itinerariesToComplete) {
         console.log(`✅ Completed: "${item.title}" (last activity ended: ${item.last_activity_end_datetime})`);
         
         try {
-          // Check if completion notification already sent
-          const [existingCompletion] = await db.query(`
-            SELECT id FROM notifications 
-            WHERE user_id = ? 
-              AND itinerary_id = ? 
-              AND type = 'reminder' 
-              AND title = 'Trip Completed!'
-          `, [item.traveler_id, item.itinerary_id]);
-          
-          if (existingCompletion.length === 0) {
+          // Only send if not already sent
+          if (item.completion_sent === 0) {
             // Send completion notification
             await notificationService.createNotification({
               user_id: item.traveler_id,
@@ -386,6 +383,12 @@ const updateItineraryStatuses = async () => {
       }
     }
     
+    // Log summary
+    console.log(`📊 Status update complete:
+      - ${ongoingResult.affectedRows} itineraries marked as ongoing
+      - ${itinerariesToComplete.length} itineraries marked as completed
+      - Notifications sent with duplicate prevention`);
+    
     return {
       ongoingUpdated: ongoingResult.affectedRows,
       completedUpdated: itinerariesToComplete.length,
@@ -397,10 +400,11 @@ const updateItineraryStatuses = async () => {
     throw error;
   }
 };
+
 // Helper function to format time
-const formatTime = (timeString) => {
-  if (!timeString) return '';
-  const [hours, minutes] = timeString.split(':');
+const formatTime = (time) => {
+  if (!time) return '';
+  const [hours, minutes] = time.split(':');
   const hour = parseInt(hours);
   const ampm = hour >= 12 ? 'PM' : 'AM';
   const displayHour = hour % 12 || 12;
@@ -457,22 +461,31 @@ const getCurrentActivityInfo = async (itineraryId) => {
       const activityStartTime = dayjs(currentActivity[0].activity_start_datetime);
       const timeSinceStart = dayjs().diff(activityStartTime, 'minute');
       
-      // Send notification if activity just started (within 5 minutes)
+      // Send notification if activity just started (within 5 minutes) AND notification hasn't been sent
       if (timeSinceStart >= 0 && timeSinceStart <= 5) {
-        try {
-          await notificationService.createNotification({
-            user_id: traveler_id,
-            type: 'activity',
-            title: `Time for ${currentActivity[0].experience_name}!`,
-            description: `Your activity at ${currentActivity[0].destination_name || 'the destination'} is starting now.`,
-            itinerary_id: itineraryId,
-            itinerary_item_id: currentActivity[0].item_id,
-            icon: 'location',
-            icon_color: '#F59E0B',
-            created_at: currentDateTime
-          });
-        } catch (notifError) {
-          console.error('Error sending activity start notification:', notifError);
+        // Check if notification already exists for this activity start
+        const [existingNotification] = await db.query(`
+          SELECT id FROM notifications 
+          WHERE user_id = ? AND type = 'activity' AND itinerary_item_id = ?
+        `, [traveler_id, currentActivity[0].item_id]);
+        
+        if (existingNotification.length === 0) {
+          // Send notification only if it doesn't exist
+          try {
+            await notificationService.createNotification({
+              user_id: traveler_id,
+              type: 'activity',
+              title: `Time for ${currentActivity[0].experience_name}!`,
+              description: `Your activity at ${currentActivity[0].destination_name || 'the destination'} is starting now.`,
+              itinerary_id: itineraryId,
+              itinerary_item_id: currentActivity[0].item_id,
+              icon: 'location',
+              icon_color: '#F59E0B',
+              created_at: currentDateTime
+            });
+          } catch (notifError) {
+            console.error('Error sending activity start notification:', notifError);
+          }
         }
       }
       
@@ -508,22 +521,30 @@ const getCurrentActivityInfo = async (itineraryId) => {
     if (nextActivity.length > 0) {
       const timeUntilNext = dayjs(nextActivity[0].activity_start_datetime).diff(dayjs(), 'minute');
       
-      // Send reminder notification if activity is starting in 30 minutes
+      // Send reminder notification if activity is starting in 30 minutes AND reminder hasn't been sent
       if (timeUntilNext > 25 && timeUntilNext <= 35) {
-        try {
-          await notificationService.createNotification({
-            user_id: traveler_id,
-            type: 'reminder',
-            title: 'Activity Starting Soon',
-            description: `${nextActivity[0].experience_name} starts in 30 minutes at ${nextActivity[0].destination_name || 'your destination'}.`,
-            itinerary_id: itineraryId,
-            itinerary_item_id: nextActivity[0].item_id,
-            icon: 'time',
-            icon_color: '#3B82F6',
-            created_at: currentDateTime
-          });
-        } catch (notifError) {
-          console.error('Error sending activity reminder notification:', notifError);
+        // Check if reminder notification already exists
+        const [existingReminder] = await db.query(`
+          SELECT id FROM notifications 
+          WHERE user_id = ? AND type = 'reminder' AND itinerary_item_id = ?
+        `, [traveler_id, nextActivity[0].item_id]);
+        
+        if (existingReminder.length === 0) {
+          try {
+            await notificationService.createNotification({
+              user_id: traveler_id,
+              type: 'reminder',
+              title: 'Activity Starting Soon',
+              description: `${nextActivity[0].experience_name} starts in 30 minutes at ${nextActivity[0].destination_name || 'your destination'}.`,
+              itinerary_id: itineraryId,
+              itinerary_item_id: nextActivity[0].item_id,
+              icon: 'time',
+              icon_color: '#3B82F6',
+              created_at: currentDateTime
+            });
+          } catch (notifError) {
+            console.error('Error sending activity reminder notification:', notifError);
+          }
         }
       }
       

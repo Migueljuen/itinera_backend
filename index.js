@@ -21,6 +21,9 @@ app.use('/destination', destinationRoutes);
 const experienceRoutes = require('./routes/experienceRoutes');
 app.use('/experience', experienceRoutes);
 
+const savedExperienceRoutes = require('./routes/savedExperienceRoutes');
+app.use('/saved-experiences', savedExperienceRoutes);
+
 // Availability
 const availabilityRoutes = require('./routes/availabilityRoutes');
 app.use('/experience/availability', availabilityRoutes);

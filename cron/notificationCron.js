@@ -47,7 +47,7 @@ const processScheduledNotifications = async () => {
         DATE_FORMAT(sn.scheduled_for, '%Y-%m-%d %H:%i:%s') as formatted_scheduled,
         COALESCE(u.timezone, 'UTC') as user_timezone
       FROM scheduled_notifications sn
-      JOIN users u ON sn.user_id = u.id
+      JOIN users u ON sn.user_id = u.user_id
       WHERE sn.is_sent = 0 
         AND sn.is_cancelled = 0
       ORDER BY sn.scheduled_for ASC
@@ -180,7 +180,7 @@ const processNow = async () => {
         COUNT(*) as notification_count,
         MIN(sn.scheduled_for) as next_notification
       FROM scheduled_notifications sn
-      JOIN users u ON sn.user_id = u.id
+      JOIN users u ON sn.user_id = u.user_id
       WHERE sn.is_sent = 0 AND sn.is_cancelled = 0
       GROUP BY u.timezone
       ORDER BY u.timezone

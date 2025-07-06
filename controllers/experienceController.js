@@ -1198,6 +1198,7 @@ const getAvailableTimeSlots = async (req, res) => {
 
 const getExperienceById = async (req, res) => {
   const { id } = req.params;
+  const user_id = req.user?.userId; // Optional user ID from auth middleware
 
   try {
     // Fetch experience and complete destination data
@@ -1308,6 +1309,17 @@ const getExperienceById = async (req, res) => {
     });
     
     experience.availability = Object.values(availabilityMap);
+
+    // Check if experience is saved by current user (if authenticated)
+    if (user_id) {
+      const [savedCheck] = await db.query(
+        'SELECT id FROM saved_experiences WHERE user_id = ? AND experience_id = ?',
+        [user_id, id]
+      );
+      experience.is_saved = savedCheck.length > 0;
+    } else {
+      experience.is_saved = false;
+    }
 
     // Structure the destination data as a nested object
     experience.destination = {
@@ -2088,60 +2100,7 @@ const updateExperienceStatus = async (req, res) => {
   }
 };
 
-const saveExperience = async (req, res) => {
-  const { user_id, experience_id } = req.body;
-
-  console.log('Received request to save experience:', { user_id, experience_id });
-
-  try {
-    // Check if already saved
-    const [existing] = await db.query(
-      'SELECT * FROM saved_experiences WHERE user_id = ? AND experience_id = ?',
-      [user_id, experience_id]
-    );
-
-    console.log('Check query results:', existing);
-
-    if (existing.length > 0) {
-      return res.status(400).send('Experience already saved');
-    }
-
-    // Insert new saved experience
-    const [result] = await db.query(
-      'INSERT INTO saved_experiences (user_id, experience_id) VALUES (?, ?)',
-      [user_id, experience_id]
-    );
-
-    console.log('Experience saved successfully. Result:', result);
-    return res.status(200).send('Experience saved successfully');
-  } catch (err) {
-    console.error('Error saving experience:', err);
-    if (err.code === 'ER_NO_REFERENCED_ROW_2') {
-      return res.status(400).send('Invalid user_id or experience_id.');
-    }
-    return res.status(500).send('Internal server error');
-  }
-};
-
-const getSavedExperiences = async (req, res) => {
-  const { user_id } = req.params;
-
-  const query = `
-    SELECT experience.* 
-    FROM experience 
-    JOIN saved_experiences ON experience.experience_id = saved_experiences.experience_id
-    WHERE saved_experiences.user_id = ?
-  `;
-
-  try {
-    const [results] = await db.query(query, [user_id]);
-    return res.status(200).json(results);
-  } catch (err) {
-    console.error('Error fetching saved experiences:', err);
-    return res.status(500).send('Error fetching saved experiences');
-  }
-};
 
 
 
-module.exports = { upload, createExperienceHandler: [upload.array('images', 5), createExperience], createExperience, createMultipleExperiences, getAllExperience,getExperienceAvailability, getExperienceById, getAvailableTimeSlots, updateExperience,updateExperienceSection,updateExperienceStatus, saveExperience, getSavedExperiences, getExperienceByUserID, getActiveExperience };
+module.exports = { upload, createExperienceHandler: [upload.array('images', 5), createExperience], createExperience, createMultipleExperiences, getAllExperience,getExperienceAvailability, getExperienceById, getAvailableTimeSlots, updateExperience,updateExperienceSection,updateExperienceStatus, getExperienceByUserID, getActiveExperience };

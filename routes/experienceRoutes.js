@@ -12,7 +12,7 @@ const {
     updateExperience, 
     updateExperienceSection,
     updateExperienceStatus, 
-    saveExperience,
+    
     getActiveExperience, 
     getSavedExperiences, 
     getExperienceByUserID
@@ -22,8 +22,7 @@ const {
 router.post('/create', createExperienceHandler);
 router.post('/bulk', upload.array('images'), createMultipleExperiences);  // Add bulk endpoint
 // router.post('/create', upload.array('image', 10), createExperience);
-router.post('/save', saveExperience);
-router.get('/saved/:user_id', getSavedExperiences);
+
 router.get('/user/:user_id', getExperienceByUserID);
 router.get('/:id/available-slots', getAvailableTimeSlots);
 router.get('/:id/availability', getExperienceAvailability);
