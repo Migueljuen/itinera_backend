@@ -2,11 +2,24 @@ const db = require('../config/db.js');
 
 // Toggle save/unsave experience
 const toggleSavedExperience = async (req, res) => {
-  const { experience_id } = req.body;
-  const user_id = req.user.userId; // Assuming you have user info from auth middleware
+  const { experience_id, user_id } = req.body;
+
+  console.log('Request body:', req.body);
+  console.log('User ID:', user_id, 'Type:', typeof user_id);
 
   if (!experience_id) {
     return res.status(400).json({ error: 'Experience ID is required' });
+  }
+
+  if (!user_id) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+
+  // Ensure user_id is a number
+  const actualUserId = parseInt(user_id);
+  
+  if (isNaN(actualUserId)) {
+    return res.status(400).json({ error: 'Valid User ID is required' });
   }
 
   const connection = await db.getConnection();
@@ -15,14 +28,14 @@ const toggleSavedExperience = async (req, res) => {
     // Check if already saved
     const [existing] = await connection.query(
       'SELECT id FROM saved_experiences WHERE user_id = ? AND experience_id = ?',
-      [user_id, experience_id]
+      [actualUserId, experience_id]
     );
 
     if (existing.length > 0) {
       // Remove from saved
       await connection.query(
         'DELETE FROM saved_experiences WHERE user_id = ? AND experience_id = ?',
-        [user_id, experience_id]
+        [actualUserId, experience_id]
       );
       
       connection.release();
@@ -35,7 +48,7 @@ const toggleSavedExperience = async (req, res) => {
       // Add to saved
       await connection.query(
         'INSERT INTO saved_experiences (user_id, experience_id) VALUES (?, ?)',
-        [user_id, experience_id]
+        [actualUserId, experience_id]
       );
       
       connection.release();
@@ -61,10 +74,14 @@ const toggleSavedExperience = async (req, res) => {
 // Check if experience is saved
 const checkSavedStatus = async (req, res) => {
   const { experienceId } = req.params;
-  const user_id = req.user.userId;
+  const { user_id } = req.query; // Get user_id from query parameters
 
   if (!experienceId) {
     return res.status(400).json({ error: 'Experience ID is required' });
+  }
+
+  if (!user_id) {
+    return res.status(400).json({ error: 'User ID is required' });
   }
 
   const connection = await db.getConnection();
@@ -88,7 +105,12 @@ const checkSavedStatus = async (req, res) => {
 
 // Get all saved experiences for a user
 const getSavedExperiences = async (req, res) => {
-  const user_id = req.user.userId;
+  const { user_id } = req.query; // Get user_id from query parameters
+
+  if (!user_id) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+
   const connection = await db.getConnection();
 
   try {
@@ -135,7 +157,12 @@ const getSavedExperiences = async (req, res) => {
 
 // Get saved experience IDs only (for bulk checking)
 const getSavedExperienceIds = async (req, res) => {
-  const user_id = req.user.userId;
+  const { user_id } = req.query; // Get user_id from query parameters
+
+  if (!user_id) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+
   const connection = await db.getConnection();
 
   try {
@@ -158,10 +185,14 @@ const getSavedExperienceIds = async (req, res) => {
 // Remove saved experience
 const removeSavedExperience = async (req, res) => {
   const { experienceId } = req.params;
-  const user_id = req.user.userId;
+  const { user_id } = req.body; // Get user_id from request body
 
   if (!experienceId) {
     return res.status(400).json({ error: 'Experience ID is required' });
+  }
+
+  if (!user_id) {
+    return res.status(400).json({ error: 'User ID is required' });
   }
 
   const connection = await db.getConnection();
@@ -191,11 +222,14 @@ const removeSavedExperience = async (req, res) => {
 
 // Bulk save experiences (for syncing)
 const bulkSaveExperiences = async (req, res) => {
-  const { experience_ids } = req.body;
-  const user_id = req.user.userId;
+  const { experience_ids, user_id } = req.body; // Get user_id from request body
 
   if (!experience_ids || !Array.isArray(experience_ids) || experience_ids.length === 0) {
     return res.status(400).json({ error: 'Experience IDs array is required' });
+  }
+
+  if (!user_id) {
+    return res.status(400).json({ error: 'User ID is required' });
   }
 
   const connection = await db.getConnection();
