@@ -13,8 +13,17 @@ const normalizeCityName = (city) => {
   // Capitalize each word
   normalized = normalized.replace(/\b\w/g, char => char.toUpperCase());
   
-  // Handle common variations
-  if (!normalized.toLowerCase().includes('city')) {
+  // List of actual cities (not municipalities)
+  const actualCities = [
+    'bacolod', 'bago', 'cadiz', 'escalante', 'himamaylan', 
+    'kabankalan', 'la carlota', 'sagay', 'san carlos', 
+    'silay', 'sipalay', 'talisay', 'victorias'
+  ];
+  
+  // Only add "City" if it's an actual city and doesn't already have it
+  const normalizedLower = normalized.toLowerCase();
+  if (!normalizedLower.includes('city') && 
+      actualCities.some(city => normalizedLower.includes(city))) {
     normalized = normalized + ' City';
   }
   

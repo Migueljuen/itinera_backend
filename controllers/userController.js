@@ -179,8 +179,71 @@ const updateUser = async (req, res) => {
   }
 };
 
+const getUserStats = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Get completed itineraries count
+    const [completedItineraries] = await db.query(
+      `SELECT COUNT(*) as count 
+       FROM itinerary 
+       WHERE traveler_id = ? AND status = 'completed'`,
+      [id]
+    );
+    
+    // Get total itineraries count
+    const [totalItineraries] = await db.query(
+      `SELECT COUNT(*) as count 
+       FROM itinerary 
+       WHERE traveler_id = ?`,
+      [id]
+    );
+    
+    // Get activities completed (items in completed itineraries)
+    const [completedActivities] = await db.query(
+      `SELECT COUNT(DISTINCT ii.item_id) as count 
+       FROM itinerary_items ii
+       JOIN itinerary i ON ii.itinerary_id = i.itinerary_id
+       WHERE i.traveler_id = ? AND i.status = 'completed'`,
+      [id]
+    );
+    
+    // Get upcoming trips count
+    const [upcomingTrips] = await db.query(
+      `SELECT COUNT(*) as count 
+       FROM itinerary 
+       WHERE traveler_id = ? AND status = 'upcoming'`,
+      [id]
+    );
+    
+    // Get saved experiences count
+    const [savedExperiences] = await db.query(
+      `SELECT COUNT(*) as count 
+       FROM saved_experiences 
+       WHERE user_id = ?`,
+      [id]
+    );
+    
+    res.json({
+      success: true,
+      stats: {
+        totalItineraries: totalItineraries[0].count,
+        completedItineraries: completedItineraries[0].count,
+        completedActivities: completedActivities[0].count,
+        upcomingTrips: upcomingTrips[0].count,
+        savedExperiences: savedExperiences[0].count
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching user stats:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch user statistics' 
+    });
+  }
+};
 
 
 
 
-module.exports = { upload, registerUser, getAllUsers, getUserById, updateUser  };
+module.exports = { upload, registerUser, getAllUsers, getUserById,getUserStats, updateUser  };

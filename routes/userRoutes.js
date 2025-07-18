@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { upload, registerUser, getAllUsers, getUserById, updateUser } = require('../controllers/userController.js');
+const { upload, registerUser, getAllUsers, getUserById,getUserStats, updateUser } = require('../controllers/userController.js');
 const authenticateToken = require('../middleware/auth');
 
 
@@ -21,6 +21,9 @@ router.get('/', getAllUsers);
 
 // Get user by ID
 router.get('/:id', getUserById); 
+// Add this route to your user routes file (e.g., userRoutes.js)
+
+router.get('/:id/stats', getUserStats);
 
 // Update
 router.put('/:id', upload.single('profile_pic'), updateUser);
