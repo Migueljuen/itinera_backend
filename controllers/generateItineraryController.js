@@ -546,15 +546,24 @@ const smartItineraryGeneration = async ({
 
   // Parse start date to get day of week for each day
   const startDate = dayjs(start_date);
+  const currentDateTime = dayjs(); // Get current date and time
+  const currentTimeStr = currentDateTime.format('HH:mm'); // Current time in HH:mm format
   
   console.log(`🗺️ Starting itinerary generation with inclusive ${travel_distance} travel distance preference`);
   console.log(`📊 Total experiences available: ${experiences.length}`);
+  console.log(`⏰ Current time: ${currentTimeStr}`);
   
   for (let day = 1; day <= totalDays; day++) {
     const currentDate = startDate.add(day - 1, 'day');
     const dayOfWeek = dayNames[currentDate.day()];
     
+    // Check if this is today
+    const isToday = currentDate.isSame(currentDateTime, 'day');
+    
     console.log(`📅 Planning day ${day} (${dayOfWeek}) with ${travel_distance} travel distance preference`);
+    if (isToday) {
+      console.log(`📍 This is TODAY - will only schedule activities after ${currentTimeStr}`);
+    }
     
     // Keep track of scheduled time slots for this day to avoid conflicts
     const scheduledSlotsForDay = [];
@@ -566,10 +575,20 @@ const smartItineraryGeneration = async ({
       const timeSlots = await getExperienceWithAvailability(experience.experience_id, dayOfWeek);
       
       if (timeSlots.length > 0) {
-        // Filter time slots based on explore_time preference
+        // Filter time slots based on explore_time preference AND current time if today
         const filteredTimeSlots = timeSlots.filter(slot => {
           const startHour = parseInt(slot.start_time.split(':')[0]);
           
+          // First, check if this time slot has already passed today
+          if (isToday) {
+            // Compare time strings (HH:mm format)
+            if (slot.start_time <= currentTimeStr) {
+              console.log(`⏭️ Skipping ${slot.start_time} - ${slot.end_time} as it's already past current time ${currentTimeStr}`);
+              return false;
+            }
+          }
+          
+          // Then apply explore_time preference
           switch (explore_time) {
             case 'Daytime':
               return startHour >= 6 && startHour < 18;
@@ -591,6 +610,9 @@ const smartItineraryGeneration = async ({
     }
     
     console.log(`✅ Available experiences for ${dayOfWeek}: ${availableExperiences.length}`);
+    if (isToday) {
+      console.log(`🕐 (Filtered to only include activities after ${currentTimeStr})`);
+    }
     
     // Select experiences for this day (avoid duplicates across days)
     const usedExperienceIds = itinerary.map(item => item.experience_id);
@@ -642,12 +664,23 @@ const smartItineraryGeneration = async ({
       console.log(`🎲 Using random shuffle (default behavior)`);
     }
     
+    // Adjust experiences per day if it's today and we're starting late
+    let adjustedExperiencesPerDay = experiencesPerDay;
+    if (isToday) {
+      // If it's already past 3 PM, maybe reduce the number of activities
+      const currentHour = currentDateTime.hour();
+      if (currentHour >= 15) {
+        adjustedExperiencesPerDay = Math.max(1, Math.floor(experiencesPerDay / 2));
+        console.log(`🌅 Reducing activities to ${adjustedExperiencesPerDay} since it's already ${currentHour}:00`);
+      }
+    }
+    
     // Schedule experiences with conflict detection
     let scheduledCount = 0;
     let attemptCount = 0;
     const maxAttempts = sortedExperiences.length;
     
-    while (scheduledCount < experiencesPerDay && attemptCount < maxAttempts) {
+    while (scheduledCount < adjustedExperiencesPerDay && attemptCount < maxAttempts) {
       const experience = sortedExperiences[attemptCount];
       
       if (!experience) {
@@ -689,8 +722,8 @@ const smartItineraryGeneration = async ({
       attemptCount++;
     }
     
-    if (scheduledCount < experiencesPerDay) {
-      console.log(`⚠️ Warning: Only scheduled ${scheduledCount}/${experiencesPerDay} experiences for day ${day} due to time conflicts`);
+    if (scheduledCount < adjustedExperiencesPerDay) {
+      console.log(`⚠️ Warning: Only scheduled ${scheduledCount}/${adjustedExperiencesPerDay} experiences for day ${day} due to ${isToday ? 'current time constraints and ' : ''}time conflicts`);
     }
   }
   
