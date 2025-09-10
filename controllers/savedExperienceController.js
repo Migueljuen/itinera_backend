@@ -4,8 +4,8 @@ const db = require('../config/db.js');
 const toggleSavedExperience = async (req, res) => {
   const { experience_id, user_id } = req.body;
 
-  console.log('Request body:', req.body);
-  console.log('User ID:', user_id, 'Type:', typeof user_id);
+  // console.log('Request body:', req.body);
+  // console.log('User ID:', user_id, 'Type:', typeof user_id);
 
   if (!experience_id) {
     return res.status(400).json({ error: 'Experience ID is required' });

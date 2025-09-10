@@ -1573,29 +1573,96 @@ const getExperienceByUserID = async (req, res) => {
       return res.status(404).json({ message: 'No experiences found for this user' });
     }
 
-    // For each experience, fetch tags and images
-    for (const experience of experiences) {
-      const experienceId = experience.experience_id;
+    const experienceIds = experiences.map(exp => exp.experience_id);
 
-      // Fetch tags
-      const [tagRows] = await db.query(
-        `SELECT t.name FROM tags t
-         JOIN experience_tags et ON t.tag_id = et.tag_id
-         WHERE et.experience_id = ?`,
-        [experienceId]
-      );
-      experience.tags = tagRows.map(tag => tag.name);
+    // Fetch tags
+    const [tagRows] = await db.query(
+      `SELECT et.experience_id, t.name 
+       FROM tags t
+       JOIN experience_tags et ON t.tag_id = et.tag_id
+       WHERE et.experience_id IN (?)`,
+      [experienceIds]
+    );
 
-      // Fetch images
-      const [imageRows] = await db.query(
-        `SELECT image_url FROM experience_images WHERE experience_id = ?`,
-        [experienceId]
+    // Fetch images
+    const [imageRows] = await db.query(
+      `SELECT experience_id, image_url 
+       FROM experience_images 
+       WHERE experience_id IN (?)`,
+      [experienceIds]
+    );
+
+    // Fetch availability + time slots
+    const [availabilityRows] = await db.query(
+      `SELECT 
+         a.experience_id,
+         a.availability_id,
+         a.day_of_week,
+         ts.slot_id,
+         ts.start_time,
+         ts.end_time
+       FROM experience_availability a
+       LEFT JOIN availability_time_slots ts 
+         ON a.availability_id = ts.availability_id
+       WHERE a.experience_id IN (?)
+       ORDER BY a.experience_id, a.day_of_week, ts.start_time`,
+      [experienceIds]
+    );
+
+    // Process into maps for easier merging
+    const tagMap = {};
+    tagRows.forEach(row => {
+      if (!tagMap[row.experience_id]) tagMap[row.experience_id] = [];
+      tagMap[row.experience_id].push(row.name);
+    });
+
+    const imageMap = {};
+    imageRows.forEach(row => {
+      if (!imageMap[row.experience_id]) imageMap[row.experience_id] = [];
+      let webPath = row.image_url;
+      if (webPath.includes(':\\') || webPath.includes('\\')) {
+        const filename = path.basename(webPath);
+        webPath = `/uploads/experiences/${filename}`;
+      }
+      imageMap[row.experience_id].push(webPath);
+    });
+
+    const availabilityMap = {};
+    availabilityRows.forEach(avail => {
+      if (!availabilityMap[avail.experience_id]) {
+        availabilityMap[avail.experience_id] = [];
+      }
+
+      let dayAvailability = availabilityMap[avail.experience_id].find(
+        day => day.availability_id === avail.availability_id
       );
-      experience.images = imageRows.map(img => {
-        const filename = path.basename(img.image_url);
-        return `/uploads/experiences/${filename}`;
-      });
-    }
+
+      if (!dayAvailability) {
+        dayAvailability = {
+          availability_id: avail.availability_id,
+          experience_id: avail.experience_id,
+          day_of_week: avail.day_of_week,
+          time_slots: []
+        };
+        availabilityMap[avail.experience_id].push(dayAvailability);
+      }
+
+      if (avail.slot_id) {
+        dayAvailability.time_slots.push({
+          slot_id: avail.slot_id,
+          availability_id: avail.availability_id,
+          start_time: avail.start_time,
+          end_time: avail.end_time
+        });
+      }
+    });
+
+    // Merge data into experiences
+    experiences.forEach(exp => {
+      exp.tags = tagMap[exp.experience_id] || [];
+      exp.images = imageMap[exp.experience_id] || [];
+      exp.availability = availabilityMap[exp.experience_id] || [];
+    });
 
     res.json(experiences);
   } catch (err) {
@@ -1603,6 +1670,7 @@ const getExperienceByUserID = async (req, res) => {
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
+
 
 const updateExperience = async (req, res) => {
   const { experience_id } = req.params;
