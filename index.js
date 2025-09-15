@@ -48,6 +48,10 @@ app.use('/itinerary', itineraryRoutes);
 const itineraryExperienceRoutes = require('./routes/itineraryExperienceRoutes');
 app.use('/itinerary', itineraryExperienceRoutes);
 
+// Booking
+const bookingRoutes = require('./routes/bookingRoutes');
+app.use('/booking', bookingRoutes);
+
 // Login
 const authRoutes = require('./routes/authRoutes');
 app.use('/api', authRoutes);

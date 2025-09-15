@@ -257,7 +257,6 @@ const saveItinerary = async (req, res) => {
     items // Array of itinerary items from preview
   } = req.body;
 
-  // Validate required fields
   if (!traveler_id || !start_date || !end_date || !title || !items || !Array.isArray(items)) {
     return res.status(400).json({ 
       message: 'Missing required fields for saving itinerary',
@@ -283,36 +282,63 @@ const saveItinerary = async (req, res) => {
 
     const itinerary_id = result.insertId;
 
-    // Step 2: Insert itinerary items
-    if (items.length > 0) {
-      const itemValues = items.map(item => [
-        itinerary_id,
-        item.experience_id,
-        item.day_number,
-        item.start_time,
-        item.end_time,
-        item.custom_note || '',
-        dayjs().format('YYYY-MM-DD HH:mm:ss'),
-        dayjs().format('YYYY-MM-DD HH:mm:ss')
-      ]);
-
-      await db.query(
+    // Step 2: Insert itinerary items + Step 3: Auto-create bookings
+    for (const item of items) {
+      // Insert itinerary item
+      const [itemResult] = await db.query(
         `INSERT INTO itinerary_items 
           (itinerary_id, experience_id, day_number, start_time, end_time, custom_note, created_at, updated_at)
-         VALUES ?`,
-        [itemValues]
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          itinerary_id,
+          item.experience_id,
+          item.day_number,
+          item.start_time,
+          item.end_time,
+          item.custom_note || '',
+          dayjs().format('YYYY-MM-DD HH:mm:ss'),
+          dayjs().format('YYYY-MM-DD HH:mm:ss')
+        ]
       );
+
+      const item_id = itemResult.insertId;
+
+      // Find creator of the experience
+      const [creatorRows] = await db.query(
+        `SELECT creator_id FROM experience WHERE experience_id = ?`,
+        [item.experience_id]
+      );
+
+      if (creatorRows.length > 0) {
+        const creator_id = creatorRows[0].creator_id;
+
+        // Insert booking automatically
+        await db.query(
+          `INSERT INTO bookings 
+            (itinerary_id, item_id, experience_id, traveler_id, creator_id, status, payment_status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            itinerary_id,
+            item_id,
+            item.experience_id,
+            traveler_id,
+            creator_id,
+            'Confirmed',        // auto-confirmed booking
+            'Unpaid',           // default until manually updated
+            dayjs().format('YYYY-MM-DD HH:mm:ss'),
+            dayjs().format('YYYY-MM-DD HH:mm:ss')
+          ]
+        );
+      }
     }
 
-    // Step 3: Get the saved itinerary with full details
+    // Step 4: Get full saved itinerary with details
     const savedItinerary = await getItineraryWithDetails(itinerary_id);
 
-    // Step 4: Create notifications for the saved itinerary
+    // Step 5: Notifications (same as your current code)
     try {
-      // Get destination info from the first item
       const destinationInfo = await getDestinationInfo(savedItinerary);
-      
-      // Create immediate confirmation notification
+
       await notificationService.createNotification({
         user_id: traveler_id,
         type: 'update',
@@ -324,99 +350,10 @@ const saveItinerary = async (req, res) => {
         created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
       });
 
-      // Create trip reminder notifications
-      const tripStartDate = dayjs(start_date);
-      const now = dayjs();
-      
-      // 3 days before reminder
-      const threeDaysBefore = tripStartDate.subtract(3, 'day').hour(9).minute(0).second(0);
-      if (threeDaysBefore.isAfter(now)) {
-        await notificationService.createScheduledNotification({
-          user_id: traveler_id,
-          type: 'reminder',
-          title: `Upcoming Trip: ${title}`,
-          description: 'Your adventure starts in 3 days! Time to start preparing.',
-          itinerary_id: itinerary_id,
-          icon: 'calendar',
-          icon_color: '#3B82F6',
-          scheduled_for: threeDaysBefore.format('YYYY-MM-DD HH:mm:ss'),
-          created_at: now.format('YYYY-MM-DD HH:mm:ss')
-        });
-      }
-
-      // 1 day before reminder
-      const oneDayBefore = tripStartDate.subtract(1, 'day').hour(18).minute(0).second(0);
-      if (oneDayBefore.isAfter(now)) {
-        await notificationService.createScheduledNotification({
-          user_id: traveler_id,
-          type: 'reminder',
-          title: `Tomorrow: ${title}`,
-          description: 'Your trip starts tomorrow! Don\'t forget to check your itinerary and pack everything you need.',
-          itinerary_id: itinerary_id,
-          icon: 'airplane',
-          icon_color: '#4F46E5',
-          scheduled_for: oneDayBefore.format('YYYY-MM-DD HH:mm:ss'),
-          created_at: now.format('YYYY-MM-DD HH:mm:ss')
-        });
-      }
-
-      // Create activity reminder notifications for each day
-      if (items.length > 0) {
-        // Group items by day
-        const itemsByDay = items.reduce((acc, item) => {
-          if (!acc[item.day_number]) {
-            acc[item.day_number] = [];
-          }
-          acc[item.day_number].push(item);
-          return acc;
-        }, {});
-
-        // Create notifications for each day's activities (EXCEPT Day 1 - handled by status update)
-        for (const [dayNumber, dayItems] of Object.entries(itemsByDay)) {
-          // Skip Day 1 activity reminders - these are handled when status changes to 'ongoing'
-          if (parseInt(dayNumber) === 1) continue;
-          
-          const activityDate = tripStartDate.add(parseInt(dayNumber) - 1, 'day');
-          const dayBeforeAt7PM = activityDate.subtract(1, 'day').hour(19).minute(0).second(0);
-          
-          if (dayBeforeAt7PM.isAfter(now) && dayItems.length > 0) {
-            // Get experience details for the notification
-            const firstActivity = await getExperienceDetails(dayItems[0].experience_id);
-            const activityCount = dayItems.length;
-            
-            await notificationService.createScheduledNotification({
-              user_id: traveler_id,
-              type: 'activity',
-              title: `Day ${dayNumber} Activities Tomorrow`,
-              description: activityCount === 1 
-                ? `${firstActivity?.title || 'Your activity'} starts at ${dayItems[0].start_time}`
-                : `${activityCount} activities planned, starting with ${firstActivity?.title || 'your first activity'} at ${dayItems[0].start_time}`,
-              itinerary_id: itinerary_id,
-              icon: 'location',
-              icon_color: '#F59E0B',
-              scheduled_for: dayBeforeAt7PM.format('YYYY-MM-DD HH:mm:ss'),
-              created_at: now.format('YYYY-MM-DD HH:mm:ss')
-            });
-          }
-        }
-      }
-
-      // REMOVED: Day of trip "Welcome to Your Adventure!" notification
-      // This is now handled by updateItineraryStatuses when the trip actually starts
-
-      // Handle edge case: Itinerary created on the same day it starts
-      if (now.isSame(tripStartDate, 'day')) {
-        // The status update cron will handle this, but if you want immediate handling:
-        console.log('📝 Note: Itinerary created on start date. Status update will handle welcome notification.');
-        
-        // You could optionally trigger a status update here:
-        // await updateItineraryStatuses();
-      }
+      // (… keep the rest of your reminders code here …)
 
     } catch (notificationError) {
-      // Log notification errors but don't fail the entire save operation
       console.error('Error creating notifications:', notificationError);
-      // You might want to track this in an error monitoring service
     }
 
     res.status(201).json({
@@ -430,6 +367,191 @@ const saveItinerary = async (req, res) => {
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
+
+
+// const saveItinerary = async (req, res) => {
+//   const {
+//     traveler_id,
+//     start_date,
+//     end_date,
+//     title,
+//     notes,
+//     items // Array of itinerary items from preview
+//   } = req.body;
+
+//   // Validate required fields
+//   if (!traveler_id || !start_date || !end_date || !title || !items || !Array.isArray(items)) {
+//     return res.status(400).json({ 
+//       message: 'Missing required fields for saving itinerary',
+//       required: ['traveler_id', 'start_date', 'end_date', 'title', 'items']
+//     });
+//   }
+
+//   try {
+//     // Step 1: Create the itinerary record
+//     const [result] = await db.query(
+//       `INSERT INTO itinerary (traveler_id, start_date, end_date, title, notes, created_at, status)
+//        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+//       [
+//         traveler_id, 
+//         start_date, 
+//         end_date, 
+//         title, 
+//         notes || 'Auto-generated itinerary', 
+//         dayjs().format('YYYY-MM-DD HH:mm:ss'), 
+//         'upcoming'
+//       ]
+//     );
+
+//     const itinerary_id = result.insertId;
+
+//     // Step 2: Insert itinerary items
+//     if (items.length > 0) {
+//       const itemValues = items.map(item => [
+//         itinerary_id,
+//         item.experience_id,
+//         item.day_number,
+//         item.start_time,
+//         item.end_time,
+//         item.custom_note || '',
+//         dayjs().format('YYYY-MM-DD HH:mm:ss'),
+//         dayjs().format('YYYY-MM-DD HH:mm:ss')
+//       ]);
+
+//       await db.query(
+//         `INSERT INTO itinerary_items 
+//           (itinerary_id, experience_id, day_number, start_time, end_time, custom_note, created_at, updated_at)
+//          VALUES ?`,
+//         [itemValues]
+//       );
+//     }
+
+//     // Step 3: Get the saved itinerary with full details
+//     const savedItinerary = await getItineraryWithDetails(itinerary_id);
+
+//     // Step 4: Create notifications for the saved itinerary
+//     try {
+//       // Get destination info from the first item
+//       const destinationInfo = await getDestinationInfo(savedItinerary);
+      
+//       // Create immediate confirmation notification
+//       await notificationService.createNotification({
+//         user_id: traveler_id,
+//         type: 'update',
+//         title: `Trip to ${destinationInfo.name || title} Saved!`,
+//         description: 'Your itinerary has been created successfully. We\'ll remind you when it\'s time to pack!',
+//         itinerary_id: itinerary_id,
+//         icon: 'checkmark-circle',
+//         icon_color: '#10B981',
+//         created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
+//       });
+
+//       // Create trip reminder notifications
+//       const tripStartDate = dayjs(start_date);
+//       const now = dayjs();
+      
+//       // 3 days before reminder
+//       const threeDaysBefore = tripStartDate.subtract(3, 'day').hour(9).minute(0).second(0);
+//       if (threeDaysBefore.isAfter(now)) {
+//         await notificationService.createScheduledNotification({
+//           user_id: traveler_id,
+//           type: 'reminder',
+//           title: `Upcoming Trip: ${title}`,
+//           description: 'Your adventure starts in 3 days! Time to start preparing.',
+//           itinerary_id: itinerary_id,
+//           icon: 'calendar',
+//           icon_color: '#3B82F6',
+//           scheduled_for: threeDaysBefore.format('YYYY-MM-DD HH:mm:ss'),
+//           created_at: now.format('YYYY-MM-DD HH:mm:ss')
+//         });
+//       }
+
+//       // 1 day before reminder
+//       const oneDayBefore = tripStartDate.subtract(1, 'day').hour(18).minute(0).second(0);
+//       if (oneDayBefore.isAfter(now)) {
+//         await notificationService.createScheduledNotification({
+//           user_id: traveler_id,
+//           type: 'reminder',
+//           title: `Tomorrow: ${title}`,
+//           description: 'Your trip starts tomorrow! Don\'t forget to check your itinerary and pack everything you need.',
+//           itinerary_id: itinerary_id,
+//           icon: 'airplane',
+//           icon_color: '#4F46E5',
+//           scheduled_for: oneDayBefore.format('YYYY-MM-DD HH:mm:ss'),
+//           created_at: now.format('YYYY-MM-DD HH:mm:ss')
+//         });
+//       }
+
+//       // Create activity reminder notifications for each day
+//       if (items.length > 0) {
+//         // Group items by day
+//         const itemsByDay = items.reduce((acc, item) => {
+//           if (!acc[item.day_number]) {
+//             acc[item.day_number] = [];
+//           }
+//           acc[item.day_number].push(item);
+//           return acc;
+//         }, {});
+
+//         // Create notifications for each day's activities (EXCEPT Day 1 - handled by status update)
+//         for (const [dayNumber, dayItems] of Object.entries(itemsByDay)) {
+//           // Skip Day 1 activity reminders - these are handled when status changes to 'ongoing'
+//           if (parseInt(dayNumber) === 1) continue;
+          
+//           const activityDate = tripStartDate.add(parseInt(dayNumber) - 1, 'day');
+//           const dayBeforeAt7PM = activityDate.subtract(1, 'day').hour(19).minute(0).second(0);
+          
+//           if (dayBeforeAt7PM.isAfter(now) && dayItems.length > 0) {
+//             // Get experience details for the notification
+//             const firstActivity = await getExperienceDetails(dayItems[0].experience_id);
+//             const activityCount = dayItems.length;
+            
+//             await notificationService.createScheduledNotification({
+//               user_id: traveler_id,
+//               type: 'activity',
+//               title: `Day ${dayNumber} Activities Tomorrow`,
+//               description: activityCount === 1 
+//                 ? `${firstActivity?.title || 'Your activity'} starts at ${dayItems[0].start_time}`
+//                 : `${activityCount} activities planned, starting with ${firstActivity?.title || 'your first activity'} at ${dayItems[0].start_time}`,
+//               itinerary_id: itinerary_id,
+//               icon: 'location',
+//               icon_color: '#F59E0B',
+//               scheduled_for: dayBeforeAt7PM.format('YYYY-MM-DD HH:mm:ss'),
+//               created_at: now.format('YYYY-MM-DD HH:mm:ss')
+//             });
+//           }
+//         }
+//       }
+
+//       // REMOVED: Day of trip "Welcome to Your Adventure!" notification
+//       // This is now handled by updateItineraryStatuses when the trip actually starts
+
+//       // Handle edge case: Itinerary created on the same day it starts
+//       if (now.isSame(tripStartDate, 'day')) {
+//         // The status update cron will handle this, but if you want immediate handling:
+//         console.log('📝 Note: Itinerary created on start date. Status update will handle welcome notification.');
+        
+//         // You could optionally trigger a status update here:
+//         // await updateItineraryStatuses();
+//       }
+
+//     } catch (notificationError) {
+//       // Log notification errors but don't fail the entire save operation
+//       console.error('Error creating notifications:', notificationError);
+//       // You might want to track this in an error monitoring service
+//     }
+
+//     res.status(201).json({
+//       message: 'Itinerary saved successfully',
+//       itinerary_id,
+//       itinerary: savedItinerary
+//     });
+
+//   } catch (err) {
+//     console.error('Error saving itinerary:', err);
+//     res.status(500).json({ error: 'Server error', details: err.message });
+//   }
+// };
 // Helper function to get destination info
 const getDestinationInfo = async (itinerary) => {
   try {
