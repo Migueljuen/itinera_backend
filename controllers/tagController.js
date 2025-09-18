@@ -46,6 +46,47 @@ const getAllTags = async (req, res) => {
   }
 };
 
+// Get categories with their related tags
+const getCategoriesWithTags = async (req, res) => {
+  try {
+    const [rows] = await db.query(`
+      SELECT 
+        c.category_id, 
+        c.name AS category_name, 
+        t.tag_id, 
+        t.name AS tag_name
+      FROM categories c
+      LEFT JOIN tags t ON c.category_id = t.category_id
+      ORDER BY c.category_id, t.tag_id
+    `);
+
+    // Group tags under their categories
+    const categories = {};
+    rows.forEach(row => {
+      if (!categories[row.category_id]) {
+        categories[row.category_id] = {
+          category_id: row.category_id,
+          category_name: row.category_name,
+          tags: []
+        };
+      }
+
+      if (row.tag_id) {
+        categories[row.category_id].tags.push({
+          tag_id: row.tag_id,
+          tag_name: row.tag_name
+        });
+      }
+    });
+
+    res.status(200).json({ categories: Object.values(categories) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+
 // Get a single tag by ID
 const getTagById = async (req, res) => {
   const { tag_id } = req.params;
@@ -113,6 +154,7 @@ module.exports = {
   createTag,
   getAllTags,
   getTagById,
+  getCategoriesWithTags,
   updateTag,
   deleteTag
 };

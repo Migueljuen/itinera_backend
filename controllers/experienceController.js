@@ -1201,6 +1201,68 @@ const getAllExperience = async (req, res) => {
     res.status(500).json({ message: 'Failed to fetch experiences' });
   }
 };
+const getExperienceTitlesAndTags = async (req, res) => {
+  try {
+    // Optional query: location or tags
+    const { location, tags } = req.query;
+
+    let query = `
+      SELECT 
+        e.title,
+        e.experience_id,
+        GROUP_CONCAT(DISTINCT t.name) AS tags
+      FROM experience e
+      LEFT JOIN experience_tags et ON e.experience_id = et.experience_id
+      LEFT JOIN tags t ON et.tag_id = t.tag_id
+      LEFT JOIN destination d ON e.destination_id = d.destination_id
+    `;
+
+    const conditions = [];
+    const params = [];
+
+    // Filter by location if provided
+    if (location) {
+      conditions.push(`LOWER(d.city) LIKE ?`);
+      params.push(`%${location.toLowerCase()}%`);
+    }
+
+    // Filter by tags if provided
+    if (tags) {
+      const tagArray = Array.isArray(tags) ? tags : tags.split(',');
+      const placeholders = tagArray.map(() => '?').join(',');
+      conditions.push(`
+        e.experience_id IN (
+          SELECT et2.experience_id
+          FROM experience_tags et2
+          JOIN tags t2 ON et2.tag_id = t2.tag_id
+          WHERE t2.name IN (${placeholders})
+        )
+      `);
+      params.push(...tagArray.map(tag => tag.trim()));
+    }
+
+    if (conditions.length > 0) {
+      query += ` WHERE ${conditions.join(' AND ')}`;
+    }
+
+    query += ` GROUP BY e.experience_id ORDER BY e.title ASC`;
+
+    const [experiences] = await db.query(query, params);
+
+    // Convert tags from comma-separated string to array
+    const result = experiences.map(exp => ({
+      experience_id: exp.experience_id,
+      title: exp.title,
+      tags: exp.tags ? exp.tags.split(',') : []
+    }));
+
+    res.status(200).json(result);
+
+  } catch (error) {
+    console.error('Error fetching experience titles and tags:', error);
+    res.status(500).json({ message: 'Failed to fetch experiences' });
+  }
+};
 
 
 const getExperienceAvailability = async (req, res) => {
@@ -2321,4 +2383,4 @@ const updateExperienceStatus = async (req, res) => {
 
 
 
-module.exports = { upload, createExperienceHandler: [upload.array('images', 5), createExperience], createExperience, createMultipleExperiences, getAllExperience,getExperienceAvailability, getExperienceById, getAvailableTimeSlots, updateExperience,updateExperienceSection,updateExperienceStatus, getExperienceByUserID, getActiveExperience };
+module.exports = { upload, createExperienceHandler: [upload.array('images', 5), createExperience], createExperience, createMultipleExperiences, getAllExperience, getExperienceTitlesAndTags,getExperienceAvailability, getExperienceById, getAvailableTimeSlots, updateExperience,updateExperienceSection,updateExperienceStatus, getExperienceByUserID, getActiveExperience };

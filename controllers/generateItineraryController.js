@@ -312,11 +312,15 @@ const saveItinerary = async (req, res) => {
       if (creatorRows.length > 0) {
         const creator_id = creatorRows[0].creator_id;
 
-        // Insert booking automatically
+        // Calculate the actual booking date based on itinerary start date and day number
+        const bookingDate = dayjs(start_date).add(item.day_number - 1, 'day').format('YYYY-MM-DD');
+
+        // Insert booking automatically with calculated booking date + generated times
         await db.query(
           `INSERT INTO bookings 
-            (itinerary_id, item_id, experience_id, traveler_id, creator_id, status, payment_status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (itinerary_id, item_id, experience_id, traveler_id, creator_id, status, payment_status, 
+             booking_date, generated_start_time, generated_end_time, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             itinerary_id,
             item_id,
@@ -325,6 +329,9 @@ const saveItinerary = async (req, res) => {
             creator_id,
             'Confirmed',        // auto-confirmed booking
             'Unpaid',           // default until manually updated
+            bookingDate,        // calculated booking date
+            item.start_time,    // generated start time
+            item.end_time,      // generated end time
             dayjs().format('YYYY-MM-DD HH:mm:ss'),
             dayjs().format('YYYY-MM-DD HH:mm:ss')
           ]
@@ -335,7 +342,7 @@ const saveItinerary = async (req, res) => {
     // Step 4: Get full saved itinerary with details
     const savedItinerary = await getItineraryWithDetails(itinerary_id);
 
-    // Step 5: Notifications (same as your current code)
+    // Step 5: Notifications
     try {
       const destinationInfo = await getDestinationInfo(savedItinerary);
 
@@ -349,8 +356,6 @@ const saveItinerary = async (req, res) => {
         icon_color: '#10B981',
         created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
       });
-
-      // (… keep the rest of your reminders code here …)
 
     } catch (notificationError) {
       console.error('Error creating notifications:', notificationError);

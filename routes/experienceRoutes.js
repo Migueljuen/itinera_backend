@@ -6,6 +6,7 @@ const {
     createExperience, 
     createMultipleExperiences,  // Add this import
     getAllExperience,
+    getExperienceTitlesAndTags,
     getAvailableTimeSlots,
     getExperienceAvailability, 
     getExperienceById, 
@@ -28,6 +29,7 @@ router.get('/:id/available-slots', getAvailableTimeSlots);
 router.get('/:id/availability', getExperienceAvailability);
 
 router.get('/', getAllExperience); 
+router.get('/titletag', getExperienceTitlesAndTags); 
 router.get('/active', getActiveExperience);
 
 // Full update route

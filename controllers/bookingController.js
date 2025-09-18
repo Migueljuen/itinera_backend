@@ -48,21 +48,35 @@ const createBooking = async (req, res) => {
 // Fetch all bookings (with slot details)
 const getAllBookings = async (req, res) => {
   try {
-    const [bookings] = await db.query(
+    // Get all bookings
+    const [bookings, fields] = await db.query(
       `SELECT 
         b.*, 
-        ats.start_time, ats.end_time, ea.day_of_week
-       FROM bookings b
-       JOIN availability_time_slots ats ON b.slot_id = ats.slot_id
-       JOIN experience_availability ea ON ats.availability_id = ea.availability_id`
+        ats.start_time, ats.end_time, ea.day_of_week,
+        u.first_name AS traveler_first_name,
+        u.last_name AS traveler_last_name,
+        u.email AS traveler_email,
+        u.profile_pic AS traveler_profile_pic,
+        e.title AS experience_title
+      FROM bookings b
+      JOIN availability_time_slots ats ON b.slot_id = ats.slot_id
+      JOIN experience_availability ea ON ats.availability_id = ea.availability_id
+      JOIN users u ON b.traveler_id = u.user_id
+      JOIN experience e ON b.experience_id = e.experience_id
+      ORDER BY b.created_at DESC`
     );
 
-    res.status(200).json({ bookings });
+    if (!bookings || bookings.length === 0) {
+      return res.status(404).json({ message: 'No bookings found' });
+    }
+
+    res.status(200).json({ bookings }); // bookings is an array
   } catch (err) {
     console.error('Error fetching bookings:', err);
     res.status(500).json({ error: 'Server error' });
   }
 };
+
 
 // Fetch a single booking by ID (with slot details)
 const getBookingById = async (req, res) => {
@@ -94,6 +108,65 @@ const getBookingById = async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 };
+
+const getBookingByCreatorId = async (req, res) => {
+  const { creatorId } = req.params;
+
+  if (!creatorId) {
+    return res.status(400).json({ message: 'Creator ID is required' });
+  }
+
+  try {
+    // Execute query
+const [rows] = await db.query(
+  `SELECT 
+    b.booking_id,
+    b.itinerary_id,
+    b.item_id,
+    b.experience_id,
+    b.traveler_id,
+    b.creator_id,
+    b.status,
+    b.payment_status,
+    b.booking_date,
+    b.created_at,
+    b.updated_at,
+    -- Prefer slot times, otherwise use itinerary item times
+    COALESCE(ats.start_time, ii.start_time) AS start_time,
+    COALESCE(ats.end_time, ii.end_time) AS end_time,
+    COALESCE(ea.day_of_week, DAYNAME(b.booking_date)) AS day_of_week,
+    u.first_name AS traveler_first_name, 
+    u.last_name AS traveler_last_name, 
+    u.email AS traveler_email,
+    u.profile_pic AS traveler_profile_pic,
+    e.title AS experience_title
+  FROM bookings b
+  LEFT JOIN availability_time_slots ats ON b.slot_id = ats.slot_id
+  LEFT JOIN experience_availability ea ON ats.availability_id = ea.availability_id
+  LEFT JOIN itinerary_items ii ON b.item_id = ii.item_id
+  JOIN users u ON b.traveler_id = u.user_id
+  JOIN experience e ON b.experience_id = e.experience_id
+  WHERE b.creator_id = ?
+  ORDER BY b.created_at DESC`,
+  [creatorId]
+);
+
+
+
+    // Check if any bookings exist
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ message: 'No bookings found for this creator' });
+    }
+
+    // Return all bookings
+    res.status(200).json({ bookings: rows });
+  } catch (err) {
+    console.error('Error fetching bookings by creator ID:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+
 
 // Update booking
 const updateBooking = async (req, res) => {
@@ -149,6 +222,7 @@ module.exports = {
   createBooking,
   getAllBookings,
   getBookingById,
+  getBookingByCreatorId,
   updateBooking,
   deleteBooking,
 };
