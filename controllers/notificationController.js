@@ -32,6 +32,8 @@ const getNotifications = async (req, res) => {
       FROM notifications n
       LEFT JOIN itinerary i ON n.itinerary_id = i.itinerary_id
       LEFT JOIN experience e ON n.experience_id = e.experience_id
+      LEFT JOIN bookings b ON n.booking_id = b.booking_id  -- New join
+  LEFT JOIN users u ON b.traveler_id = u.user_id
       ${whereClause}
       ORDER BY n.created_at DESC
       LIMIT ? OFFSET ?`,

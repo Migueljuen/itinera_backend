@@ -40,7 +40,7 @@ const startStatusUpdateCron = () => {
     }
   });
 
-  console.log('✅ Status update cron jobs started');
+  // console.log('✅ Status update cron jobs started');
 };
 
 module.exports = { startStatusUpdateCron };

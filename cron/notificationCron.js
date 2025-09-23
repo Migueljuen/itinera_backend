@@ -10,11 +10,11 @@ dayjs.extend(timezone);
 
 // Start notification processing cron job
 const startNotificationCron = () => {
-  console.log('Starting notification processing cron job...');
+  // console.log('Starting notification processing cron job...');
   
   // Process notifications every 2 minutes
   cron.schedule('*/2 * * * *', async () => {
-    console.log('📧 Processing scheduled notifications at:', new Date().toISOString());
+    // console.log('📧 Processing scheduled notifications at:', new Date().toISOString());
     
     try {
       await processScheduledNotifications();
@@ -23,7 +23,7 @@ const startNotificationCron = () => {
     }
   });
 
-  console.log('✅ Notification cron job started');
+  // console.log('✅ Notification cron job started');
 };
 
 // Process scheduled notifications WITH TIMEZONE SUPPORT
@@ -56,7 +56,7 @@ const processScheduledNotifications = async () => {
     console.log(`📋 Found ${pendingNotifications.length} total notifications to check`);
 
     if (pendingNotifications.length === 0) {
-      console.log('✅ No notifications to check');
+      // console.log('✅ No notifications to check');
       return {
         processed: 0,
         failed: 0,

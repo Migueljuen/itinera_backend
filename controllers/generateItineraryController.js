@@ -283,6 +283,8 @@ const saveItinerary = async (req, res) => {
     const itinerary_id = result.insertId;
 
     // Step 2: Insert itinerary items + Step 3: Auto-create bookings
+    const creatorIds = new Set(); // To collect unique creator IDs
+
     for (const item of items) {
       // Insert itinerary item
       const [itemResult] = await db.query(
@@ -311,6 +313,7 @@ const saveItinerary = async (req, res) => {
 
       if (creatorRows.length > 0) {
         const creator_id = creatorRows[0].creator_id;
+        creatorIds.add(creator_id); // Collect unique creator IDs
 
         // Calculate the actual booking date based on itinerary start date and day number
         const bookingDate = dayjs(start_date).add(item.day_number - 1, 'day').format('YYYY-MM-DD');
@@ -346,6 +349,7 @@ const saveItinerary = async (req, res) => {
     try {
       const destinationInfo = await getDestinationInfo(savedItinerary);
 
+      // Send notification to traveler
       await notificationService.createNotification({
         user_id: traveler_id,
         type: 'update',
@@ -356,6 +360,20 @@ const saveItinerary = async (req, res) => {
         icon_color: '#10B981',
         created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
       });
+
+      // Send notifications to all unique creators
+      for (const creator_id of creatorIds) {
+        await notificationService.createNotification({
+          user_id: creator_id,
+          type: 'booking',
+          title: 'New Booking Received!',
+          description: `You have a new booking for ${destinationInfo.name || title} on ${dayjs(start_date).format('MMM DD, YYYY')}`,
+          itinerary_id: itinerary_id,
+          icon: 'calendar',
+          icon_color: '#3B82F6',
+          created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
+        });
+      }
 
     } catch (notificationError) {
       console.error('Error creating notifications:', notificationError);

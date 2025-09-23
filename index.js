@@ -91,18 +91,25 @@ function initializeCronJobs() {
     if (fs.existsSync(statusCronPath)) {
       const { startStatusUpdateCron } = require('./cron/statusUpdateCron');
       startStatusUpdateCron();
-      console.log('✅ Status update cron job started');
+      // console.log('✅ Status update cron job started');
     } else {
       console.log('⚠️  Status update cron file not found. Create ./cron/statusUpdateCron.js');
     }
     
-    console.log('🎯 All available cron jobs initialized');
+    // console.log('🎯 All available cron jobs initialized');
     
   } catch (error) {
     console.error('❌ Error initializing cron jobs:', error);
     console.log('⚠️  Server will continue running without cron jobs');
   }
 }
+
+
+// booking CRON
+const { setupBookingStatusCron } = require('./cron/bookingStatusCron');
+
+// Start the cron job when your server starts
+setupBookingStatusCron();
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
