@@ -4,19 +4,31 @@ const { createBooking,
   getAllBookings,
   getBookingById,
   getBookingByCreatorId,
+  updateTravelerAttendance,
   updateBooking,
-  deleteBooking, } = require('../controllers/bookingController.js');
+  deleteBooking,
+  getUpcomingBookings, } = require('../controllers/bookingController.js');
 
 
 // CRUD Routes
-router.post("/create", createBooking);       // Create booking
+router.post("/create", createBooking);               // Create booking
 router.get("/", getAllBookings); 
-router.get("/creator/:creatorId", getBookingByCreatorId);       // Get all bookings
-router.get("/:id", getBookingById); 
+
+// More specific routes must come BEFORE generic :id
+router.get("/creator/upcoming/:creatorId", getUpcomingBookings);   
+router.get("/creator/:creatorId", getBookingByCreatorId);  
 
 
-// Get booking by ID
-router.put("/:id", updateBooking);     // Update booking
-router.delete("/:id", deleteBooking);  // Delete booking
+
+router.put("/:bookingId/attendance/:notificationId", updateTravelerAttendance);
+
+  
+router.get("/:id", getBookingById);                  // Get booking by ID
+
+router.put("/:id", updateBooking);                   // Update booking
+router.delete("/:id", deleteBooking);                // Delete booking
+
+
+
 
 module.exports = router;

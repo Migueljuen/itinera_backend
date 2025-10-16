@@ -22,18 +22,19 @@ const getNotifications = async (req, res) => {
       whereClause += ' AND n.type IN ("update", "alert")';
     }
 
-    // Get notifications with related data
+    // Get notifications with related data INCLUDING traveler_attendance
     const [notifications] = await db.query(
       `SELECT 
         n.*,
         i.title as itinerary_title,
         i.start_date as itinerary_start_date,
-        e.title as experience_name
+        e.title as experience_name,
+        b.traveler_attendance  -- Add this line!
       FROM notifications n
       LEFT JOIN itinerary i ON n.itinerary_id = i.itinerary_id
       LEFT JOIN experience e ON n.experience_id = e.experience_id
-      LEFT JOIN bookings b ON n.booking_id = b.booking_id  -- New join
-  LEFT JOIN users u ON b.traveler_id = u.user_id
+      LEFT JOIN bookings b ON n.booking_id = b.booking_id
+      LEFT JOIN users u ON b.traveler_id = u.user_id
       ${whereClause}
       ORDER BY n.created_at DESC
       LIMIT ? OFFSET ?`,

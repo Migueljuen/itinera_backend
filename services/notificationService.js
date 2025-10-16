@@ -11,64 +11,68 @@ class NotificationService {
     this.db = db;
   }
 
-  // Create immediate notification
-  async createNotification(data) {
-    try {
-      const {
+// Create immediate notification
+async createNotification(data) {
+  try {
+    const {
+      user_id,
+      type,
+      title,
+      description,
+      itinerary_id,
+      itinerary_item_id,
+      experience_id,
+      booking_id, // 👈 add booking_id
+      icon,
+      icon_color,
+      action_url,
+      created_at
+    } = data;
+
+    const [result] = await this.db.query(
+      `INSERT INTO notifications 
+        (user_id, type, title, description, is_read, created_at, 
+         itinerary_id, itinerary_item_id, experience_id, booking_id, 
+         icon, icon_color, action_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
         user_id,
         type,
         title,
         description,
-        itinerary_id,
-        itinerary_item_id,
-        experience_id,
-        icon,
-        icon_color,
-        action_url,
-        created_at
-      } = data;
+        false, // is_read defaults to false
+        created_at || dayjs().format('YYYY-MM-DD HH:mm:ss'),
+        itinerary_id || null,
+        itinerary_item_id || null,
+        experience_id || null,
+        booking_id || null, // 👈 insert booking_id properly
+        icon || this.getDefaultIcon(type),
+        icon_color || this.getDefaultColor(type),
+        action_url || null
+      ]
+    );
 
-      const [result] = await this.db.query(
-        `INSERT INTO notifications 
-          (user_id, type, title, description, is_read, created_at, 
-           itinerary_id, itinerary_item_id, experience_id, 
-           icon, icon_color, action_url)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          user_id,
+    // If push notifications are enabled, send push notification
+    if (this.isPushEnabled()) {
+      await this.sendPushNotification(user_id, {
+        title,
+        body: description,
+        data: {
+          notificationId: result.insertId,
           type,
-          title,
-          description,
-          false, // is_read defaults to false
-          created_at || dayjs().format('YYYY-MM-DD HH:mm:ss'),
-          itinerary_id || null,
-          itinerary_item_id || null,
-          experience_id || null,
-          icon || this.getDefaultIcon(type),
-          icon_color || this.getDefaultColor(type),
-          action_url || null
-        ]
-      );
-
-      // If push notifications are enabled, send push notification
-      if (this.isPushEnabled()) {
-        await this.sendPushNotification(user_id, {
-          title,
-          body: description,
-          data: {
-            notificationId: result.insertId,
-            type,
-            itineraryId: itinerary_id
-          }
-        });
-      }
-
-      return { success: true, notificationId: result.insertId };
-    } catch (error) {
-      console.error('Error creating notification:', error);
-      throw error;
+          itineraryId: itinerary_id,
+          bookingId: booking_id || null // 👈 include bookingId in push payload
+        }
+      });
     }
+
+    return { success: true, notificationId: result.insertId };
+  } catch (error) {
+    console.error('Error creating notification:', error);
+    throw error;
   }
+}
+
 
   // Create scheduled notification WITH TIMEZONE SUPPORT
   async createScheduledNotification(data) {
@@ -255,6 +259,7 @@ class NotificationService {
           created_at,
           CONVERT_TZ(created_at, @@session.time_zone, ?) as local_created_at,
           itinerary_id,
+          booking_id,
           icon,
           icon_color,
           action_url

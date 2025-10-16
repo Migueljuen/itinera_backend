@@ -129,62 +129,182 @@
     }
   };
 
-  const getBookingByCreatorId = async (req, res) => {
-    const { creatorId } = req.params;
+const getBookingByCreatorId = async (req, res) => {
+  const { creatorId } = req.params;
 
-    if (!creatorId) {
-      return res.status(400).json({ message: 'Creator ID is required' });
+  if (!creatorId) {
+    return res.status(400).json({ message: 'Creator ID is required' });
+  }
+
+  try {
+    // Execute query
+    const [rows] = await db.query(
+      `SELECT 
+        b.booking_id,
+        b.itinerary_id,
+        b.item_id,
+        b.experience_id,
+        b.traveler_id,
+        b.creator_id,
+        b.status,
+        b.payment_status,
+        b.booking_date,
+        b.created_at,
+        b.updated_at,
+        -- Prefer slot times, otherwise use itinerary item times
+        COALESCE(ats.start_time, ii.start_time) AS start_time,
+        COALESCE(ats.end_time, ii.end_time) AS end_time,
+        COALESCE(ea.day_of_week, DAYNAME(b.booking_date)) AS day_of_week,
+        u.first_name AS traveler_first_name, 
+        u.last_name AS traveler_last_name, 
+        u.email AS traveler_email,
+        u.profile_pic AS traveler_profile_pic,
+        e.title AS experience_title,
+        d.name AS destination_name,       -- 👈 destination name
+        d.city AS destination_city        -- 👈 destination city
+      FROM bookings b
+      LEFT JOIN availability_time_slots ats ON b.slot_id = ats.slot_id
+      LEFT JOIN experience_availability ea ON ats.availability_id = ea.availability_id
+      LEFT JOIN itinerary_items ii ON b.item_id = ii.item_id
+      JOIN users u ON b.traveler_id = u.user_id
+      JOIN experience e ON b.experience_id = e.experience_id
+      JOIN destination d ON e.destination_id = d.destination_id   -- 👈 join destination
+      WHERE b.creator_id = ?
+      ORDER BY b.created_at DESC`,
+      [creatorId]
+    );
+
+    // Check if any bookings exist
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ message: 'No bookings found for this creator' });
     }
 
-    try {
-      // Execute query
-  const [rows] = await db.query(
-    `SELECT 
-      b.booking_id,
-      b.itinerary_id,
-      b.item_id,
-      b.experience_id,
-      b.traveler_id,
-      b.creator_id,
-      b.status,
-      b.payment_status,
-      b.booking_date,
-      b.created_at,
-      b.updated_at,
-      -- Prefer slot times, otherwise use itinerary item times
-      COALESCE(ats.start_time, ii.start_time) AS start_time,
-      COALESCE(ats.end_time, ii.end_time) AS end_time,
-      COALESCE(ea.day_of_week, DAYNAME(b.booking_date)) AS day_of_week,
-      u.first_name AS traveler_first_name, 
-      u.last_name AS traveler_last_name, 
-      u.email AS traveler_email,
-      u.profile_pic AS traveler_profile_pic,
-      e.title AS experience_title
-    FROM bookings b
-    LEFT JOIN availability_time_slots ats ON b.slot_id = ats.slot_id
-    LEFT JOIN experience_availability ea ON ats.availability_id = ea.availability_id
-    LEFT JOIN itinerary_items ii ON b.item_id = ii.item_id
-    JOIN users u ON b.traveler_id = u.user_id
-    JOIN experience e ON b.experience_id = e.experience_id
-    WHERE b.creator_id = ?
-    ORDER BY b.created_at DESC`,
-    [creatorId]
-  );
+    // Return all bookings
+    res.status(200).json({ bookings: rows });
+  } catch (err) {
+    console.error('Error fetching bookings by creator ID:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
 
 
+const getUpcomingBookings = async (req, res) => {
+  const { creatorId } = req.params;
 
-      // Check if any bookings exist
-      if (!rows || rows.length === 0) {
-        return res.status(404).json({ message: 'No bookings found for this creator' });
-      }
+  if (!creatorId) {
+    return res.status(400).json({ message: 'Creator ID is required' });
+  }
 
-      // Return all bookings
-      res.status(200).json({ bookings: rows });
-    } catch (err) {
-      console.error('Error fetching bookings by creator ID:', err);
-      res.status(500).json({ error: 'Server error' });
+  try {
+    const [rows] = await db.query(
+      `SELECT 
+        b.booking_id,
+        b.itinerary_id,
+        b.item_id,
+        b.experience_id,
+        b.traveler_id,
+        b.creator_id,
+        b.status,
+        b.payment_status,
+        b.booking_date,
+        b.created_at,
+        b.updated_at,
+        -- Prefer slot times, otherwise use itinerary item times
+        COALESCE(ats.start_time, ii.start_time) AS start_time,
+        COALESCE(ats.end_time, ii.end_time) AS end_time,
+        COALESCE(ea.day_of_week, DAYNAME(b.booking_date)) AS day_of_week,
+        u.first_name AS traveler_first_name, 
+        u.last_name AS traveler_last_name, 
+        u.email AS traveler_email,
+        u.profile_pic AS traveler_profile_pic,
+        e.title AS experience_title,
+        d.name AS destination_name,
+        d.city AS destination_city
+      FROM bookings b
+      LEFT JOIN availability_time_slots ats ON b.slot_id = ats.slot_id
+      LEFT JOIN experience_availability ea ON ats.availability_id = ea.availability_id
+      LEFT JOIN itinerary_items ii ON b.item_id = ii.item_id
+      JOIN users u ON b.traveler_id = u.user_id
+      JOIN experience e ON b.experience_id = e.experience_id
+      JOIN destination d ON e.destination_id = d.destination_id
+WHERE b.creator_id = ?
+  AND b.status = 'Confirmed'
+AND TIMESTAMP(DATE(b.booking_date), COALESCE(ats.start_time, ii.start_time)) >= NOW()
+
+      `,
+      [creatorId]
+    );
+
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ message: 'No upcoming bookings found' });
     }
-  };
+
+    res.status(200).json({ bookings: rows });
+  } catch (err) {
+    console.error('Error fetching upcoming bookings:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+const updateTravelerAttendance = async (req, res) => {
+  const { bookingId, notificationId } = req.params;
+  const { response } = req.body;
+
+  console.log('🔔 updateTravelerAttendance called - params:', req.params, 'body:', req.body);
+
+  // Coerce to integers and validate
+  const bookingIdNum = parseInt(bookingId, 10);
+  const notificationIdNum = parseInt(notificationId, 10);
+
+  if (isNaN(bookingIdNum) || isNaN(notificationIdNum)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid bookingId or notificationId (must be numbers)',
+      received: { bookingId, notificationId }
+    });
+  }
+
+  try {
+    let newAttendance;
+    if (response === "yes") newAttendance = "Present";
+    else if (response === "no") newAttendance = "Absent";
+    else if (response === "waiting") newAttendance = "Waiting";
+    else {
+      return res.status(400).json({ success: false, error: "Invalid response type" });
+    }
+
+    // Update bookings table
+    await db.query(
+      `UPDATE bookings 
+       SET traveler_attendance = ?, updated_at = NOW()
+       WHERE booking_id = ?`,
+      [newAttendance, bookingIdNum]
+    );
+
+    // Mark notification as read (notifications.id is the column)
+    await db.query(
+      `UPDATE notifications
+       SET is_read = 1, read_at = NOW()
+       WHERE id = ?`,
+      [notificationIdNum]
+    );
+
+    console.log(`✅ Attendance updated: booking ${bookingIdNum} => ${newAttendance}, notification ${notificationIdNum} marked read`);
+
+    return res.json({
+      success: true,
+      bookingId: bookingIdNum,
+      notificationId: notificationIdNum,
+      traveler_attendance: newAttendance,
+    });
+  } catch (error) {
+    console.error("❌ Error updating attendance:", error);
+    return res.status(500).json({ success: false, error: "Failed to update attendance" });
+  }
+};
+
+
+
 
 
 
@@ -244,6 +364,8 @@
     getAllBookings,
     getBookingById,
     getBookingByCreatorId,
+    getUpcomingBookings,
+    updateTravelerAttendance,
     updateBooking,
     deleteBooking,
   };

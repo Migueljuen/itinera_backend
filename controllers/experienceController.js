@@ -1471,19 +1471,30 @@ const getExperienceById = async (req, res) => {
     experience.tags = tagRows.map(tag => tag.name);
 
     // Fetch images associated with the experience
-    const [imageRows] = await db.query(
-      `SELECT image_url FROM experience_images WHERE experience_id = ?`,
-      [id]
-    );
-    
-    // Convert file system paths to URLs
-    experience.images = imageRows.map(img => {
-      // Extract just the filename from the absolute path
-      const filename = path.basename(img.image_url);
-      // Return a relative URL path that your server can handle
-      return `/uploads/experiences/${filename}`;
-    });
+const [imageRows] = await db.query(
+  `SELECT image_id, image_url FROM experience_images WHERE experience_id = ?`,
+  [id]
+);
 
+    
+experience.images = imageRows.map(img => {
+  // If image_url already contains the full path, use it
+  // Otherwise, extract filename and construct path
+  let imageUrl = img.image_url;
+  
+  // If it's an absolute path, extract just the filename
+  if (imageUrl.includes('\\') || imageUrl.includes('/')) {
+    const filename = path.basename(imageUrl);
+    imageUrl = `uploads/experiences/${filename}`;
+  }
+  
+  // Return object with image_id and image_url
+  return {
+    image_id: img.image_id,
+    image_url: imageUrl, // No leading slash
+    experience_id: id
+  };
+});
     // Fetch availability data
     const [availabilityRows] = await db.query(
       `SELECT 
@@ -2031,16 +2042,60 @@ const updateExperience = async (req, res) => {
     }
 
     // Handle image deletions
-    if (images_to_delete && Array.isArray(images_to_delete) && images_to_delete.length > 0) {
-      // Delete from database
-      await connection.query(
-        'DELETE FROM experience_images WHERE experience_id = ? AND image_id IN (?)',
-        [experience_id, images_to_delete]
-      );
+ // Replace the "Handle image deletions" section in your updateExperience function
 
-      // You might want to also delete physical files here
-      // This would require getting the file paths first and using fs.unlink
+// Handle image deletions
+if (images_to_delete) {
+  let parsedImagesToDelete;
+  try {
+    // Parse if it's a JSON string
+    parsedImagesToDelete = typeof images_to_delete === 'string' 
+      ? JSON.parse(images_to_delete) 
+      : images_to_delete;
+    
+    console.log("Received images_to_delete:", images_to_delete);
+    console.log("Parsed images to delete:", parsedImagesToDelete);
+  } catch (e) {
+    console.error("Failed to parse images_to_delete:", e);
+    parsedImagesToDelete = Array.isArray(images_to_delete) ? images_to_delete : [];
+  }
+
+  if (Array.isArray(parsedImagesToDelete) && parsedImagesToDelete.length > 0) {
+    console.log("Deleting images with IDs:", parsedImagesToDelete, "from experience:", experience_id);
+    
+    // Get file paths before deletion for cleanup
+    const [imagesToDelete] = await connection.query(
+      'SELECT image_id, image_url FROM experience_images WHERE experience_id = ? AND image_id IN (?)',
+      [experience_id, parsedImagesToDelete]
+    );
+    
+    console.log("Images found to delete:", imagesToDelete);
+
+    // Delete from database
+    const [deleteResult] = await connection.query(
+      'DELETE FROM experience_images WHERE experience_id = ? AND image_id IN (?)',
+      [experience_id, parsedImagesToDelete]
+    );
+    
+    console.log("Delete result:", deleteResult);
+    console.log("Number of images deleted:", deleteResult.affectedRows);
+
+    // Optional: Delete physical files
+    const fs = require('fs').promises;
+    const path = require('path');
+    for (const img of imagesToDelete) {
+      try {
+        const filePath = path.join(__dirname, '..', img.image_url);
+        await fs.unlink(filePath);
+        console.log("Physical file deleted:", filePath);
+      } catch (err) {
+        console.error(`Failed to delete file ${img.image_url}:`, err.message);
+      }
     }
+  } else {
+    console.log("No valid images to delete");
+  }
+}
 
     // Handle new image uploads
     if (files && files.length > 0) {

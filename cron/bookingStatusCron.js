@@ -5,12 +5,13 @@ const utc = require('dayjs/plugin/utc');
 const timezone = require('dayjs/plugin/timezone');
 const isSameOrAfter = require('dayjs/plugin/isSameOrAfter');
 const isSameOrBefore = require('dayjs/plugin/isSameOrBefore');
+const notificationService = require('../services/notificationService.js');
 const db = require('../config/db.js');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 dayjs.extend(isSameOrAfter);
 dayjs.extend(isSameOrBefore);
-
+const now = dayjs();
 const updateBookingStatuses = async () => {
   try {
     console.log('🔄 Starting booking status update job...');
@@ -25,6 +26,7 @@ const updateBookingStatuses = async () => {
         b.traveler_id,
         b.traveler_attendance,
         b.last_attendance_prompt,
+         b.attendance_reminders_sent,
         -- Get start and end times (prefer slot times, fallback to itinerary item times)
         COALESCE(ats.start_time, ii.start_time) AS start_time,
         COALESCE(ats.end_time, ii.end_time) AS end_time,
@@ -97,32 +99,70 @@ const updateBookingStatuses = async () => {
           await sendBookingStatusNotification(booking, newStatus);
         }
 
-        // 🔹 Extra: Attendance re-prompt logic
-        if (booking.status === 'Ongoing' && booking.traveler_attendance === 'Waiting') {
-          const lastPrompt = booking.last_attendance_prompt ? dayjs(booking.last_attendance_prompt) : null;
+// 🔹 Extra: Attendance prompt → reminder → auto-mark absent
+if (booking.status === 'Ongoing' && booking.traveler_attendance === 'Waiting') {
+  const lastPrompt = booking.last_attendance_prompt ? dayjs(booking.last_attendance_prompt) : null;
+  const minutesSincePrompt = lastPrompt ? nowInCreatorTz.diff(lastPrompt, 'minute') : null;
 
-          if (!lastPrompt || nowInCreatorTz.diff(lastPrompt, 'minute') >= 15) {
-            await notificationService.createNotification({
-              user_id: booking.creator_id,
-              type: 'attendance_confirmation',
-              title: 'Still waiting for traveler?',
-              description: `15 minutes have passed. Did the traveler show up for "${booking.experience_title}"?`,
-              icon: 'help-circle',
-              icon_color: '#F59E0B',
-              created_at: nowInCreatorTz.format('YYYY-MM-DD HH:mm:ss'),
-              metadata: { booking_id: booking.booking_id }
-            });
+  // Case 1: send reminder after 15 min
+  if (booking.attendance_reminders_sent === 0 && minutesSincePrompt >= 15) {
+    await notificationService.createNotification({
+      user_id: booking.creator_id,
+      type: 'attendance_confirmation',
+      title: 'Still waiting for traveler?',
+      description: `15 minutes have passed. Traveler will be marked absent if not confirmed in another 15 minutes.`,
+      icon: 'help-circle',
+      icon_color: '#F59E0B',
+      created_at: nowInCreatorTz.format('YYYY-MM-DD HH:mm:ss'),
+ booking_id: booking.booking_id 
+    });
 
-            await db.query(
-              `UPDATE bookings 
-               SET last_attendance_prompt = ? 
-               WHERE booking_id = ?`,
-              [nowInCreatorTz.format('YYYY-MM-DD HH:mm:ss'), booking.booking_id]
-            );
+    await db.query(
+      `UPDATE bookings 
+       SET last_attendance_prompt = ?, attendance_reminders_sent = 1
+       WHERE booking_id = ?`,
+      [nowInCreatorTz.format('YYYY-MM-DD HH:mm:ss'), booking.booking_id]
+    );
 
-            console.log(`⏳ Sent re-prompt for booking ${booking.booking_id}`);
-          }
-        }
+    console.log(`⏳ Sent reminder for booking ${booking.booking_id}`);
+  }
+
+  // Case 2: auto-mark absent after another 15 min
+  if (booking.attendance_reminders_sent === 1 && minutesSincePrompt >= 15) {
+    await db.query(
+      `UPDATE bookings 
+       SET traveler_attendance = 'Absent', attendance_reminders_sent = 2
+       WHERE booking_id = ?`,
+      [booking.booking_id]
+    );
+
+    await notificationService.createNotification({
+      user_id: booking.creator_id,
+      type: 'update',
+      title: 'Traveler Absent',
+      description: `Traveler did not show up for "${booking.experience_title}". Marked as absent automatically.`,
+      icon: 'x-circle',
+      icon_color: '#EF4444',
+      created_at: nowInCreatorTz.format('YYYY-MM-DD HH:mm:ss'),
+   booking_id: booking.booking_id 
+    });
+
+    await notificationService.createNotification({
+      user_id: booking.traveler_id,
+      type: 'update',
+      title: 'Marked Absent',
+      description: `You were marked absent for "${booking.experience_title}" since attendance was not confirmed.`,
+      icon: 'x-circle',
+      icon_color: '#EF4444',
+      created_at: nowInCreatorTz.format('YYYY-MM-DD HH:mm:ss'),
+      booking_id: booking.booking_id 
+    });
+
+    console.log(`🚨 Booking ${booking.booking_id} auto-marked as absent.`);
+  }
+}
+
+
 
       } catch (bookingError) {
         console.error(`❌ Error processing booking ${booking.booking_id}:`, bookingError);
@@ -192,7 +232,7 @@ const sendBookingStatusNotification = async (booking, newStatus) => {
         icon: 'help-circle',
         icon_color: '#F59E0B',
         created_at: now,
-        metadata: { booking_id: booking.booking_id }
+         booking_id: booking.booking_id 
       });
     }
 
