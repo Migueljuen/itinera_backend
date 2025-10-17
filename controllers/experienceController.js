@@ -1756,6 +1756,7 @@ const updateExperience = async (req, res) => {
     // Destination data (for creating new or switching)
     destination_name, city, destination_description, latitude, longitude,
     destination_id,
+    update_destination, // Flag to force update of existing destination
     
     // Arrays
     availability, tags,
@@ -1878,12 +1879,39 @@ const updateExperience = async (req, res) => {
       updateValues.push(JSON.stringify([travel_companion]));
     }
 
-    // Handle destination update
+    // Handle destination update - IMPROVED LOGIC
     if (destination_id !== undefined || (destination_name && city && destination_description && latitude && longitude)) {
       let finalDestinationId;
 
-      if (destination_id) {
-        // Use existing destination
+      if (destination_id && update_destination === 'true') {
+        // UPDATE existing destination with new data
+        console.log('Updating existing destination:', destination_id);
+        
+        // Calculate distance from city center if applicable
+        let distanceFromCenter = null;
+        if (typeof CITY_CENTERS !== 'undefined' && CITY_CENTERS[city]) {
+          const cityCenter = CITY_CENTERS[city];
+          distanceFromCenter = calculateDistanceFromCityCenter(
+            parseFloat(latitude),
+            parseFloat(longitude),
+            cityCenter.lat,
+            cityCenter.lng
+          );
+          distanceFromCenter = Math.round(distanceFromCenter * 100) / 100;
+        }
+
+        await connection.query(
+          `UPDATE destination 
+           SET name = ?, city = ?, description = ?, latitude = ?, longitude = ?, distance_from_city_center = ?
+           WHERE destination_id = ?`,
+          [destination_name, city, destination_description, parseFloat(latitude), parseFloat(longitude), distanceFromCenter, destination_id]
+        );
+        
+        finalDestinationId = destination_id;
+        console.log('Destination updated successfully');
+        
+      } else if (destination_id) {
+        // Just use the existing destination without updating
         const [destinationCheck] = await connection.query(
           'SELECT destination_id FROM destination WHERE destination_id = ?',
           [destination_id]
@@ -1893,8 +1921,12 @@ const updateExperience = async (req, res) => {
           return res.status(404).json({ message: 'Specified destination does not exist' });
         }
         finalDestinationId = destination_id;
+        console.log('Using existing destination without update:', destination_id);
+        
       } else if (destination_name && city && destination_description && latitude && longitude) {
         // Create new destination or use existing
+        console.log('Creating new destination or finding existing');
+        
         const [existingDestination] = await connection.query(
           'SELECT destination_id FROM destination WHERE name = ? AND city = ?', 
           [destination_name, city]
@@ -1902,8 +1934,9 @@ const updateExperience = async (req, res) => {
         
         if (existingDestination.length > 0) {
           finalDestinationId = existingDestination[0].destination_id;
+          console.log('Found existing destination:', finalDestinationId);
         } else {
-          // Calculate distance from city center (assuming you have CITY_CENTERS and calculateDistanceFromCityCenter)
+          // Calculate distance from city center
           let distanceFromCenter = null;
           
           if (typeof CITY_CENTERS !== 'undefined' && CITY_CENTERS[city]) {
@@ -1919,10 +1952,11 @@ const updateExperience = async (req, res) => {
 
           const [newDestination] = await connection.query(
             'INSERT INTO destination (name, city, description, latitude, longitude, distance_from_city_center) VALUES (?, ?, ?, ?, ?, ?)',
-            [destination_name, city, destination_description, latitude, longitude, distanceFromCenter]
+            [destination_name, city, destination_description, parseFloat(latitude), parseFloat(longitude), distanceFromCenter]
           );
           
           finalDestinationId = newDestination.insertId;
+          console.log('Created new destination:', finalDestinationId);
         }
       }
 
@@ -2042,62 +2076,54 @@ const updateExperience = async (req, res) => {
     }
 
     // Handle image deletions
- // Replace the "Handle image deletions" section in your updateExperience function
-
-// Handle image deletions
-if (images_to_delete) {
-  let parsedImagesToDelete;
-  try {
-    // Parse if it's a JSON string
-    parsedImagesToDelete = typeof images_to_delete === 'string' 
-      ? JSON.parse(images_to_delete) 
-      : images_to_delete;
-    
-    console.log("Received images_to_delete:", images_to_delete);
-    console.log("Parsed images to delete:", parsedImagesToDelete);
-  } catch (e) {
-    console.error("Failed to parse images_to_delete:", e);
-    parsedImagesToDelete = Array.isArray(images_to_delete) ? images_to_delete : [];
-  }
-
-  if (Array.isArray(parsedImagesToDelete) && parsedImagesToDelete.length > 0) {
-    console.log("Deleting images with IDs:", parsedImagesToDelete, "from experience:", experience_id);
-    
-    // Get file paths before deletion for cleanup
-    const [imagesToDelete] = await connection.query(
-      'SELECT image_id, image_url FROM experience_images WHERE experience_id = ? AND image_id IN (?)',
-      [experience_id, parsedImagesToDelete]
-    );
-    
-    console.log("Images found to delete:", imagesToDelete);
-
-    // Delete from database
-    const [deleteResult] = await connection.query(
-      'DELETE FROM experience_images WHERE experience_id = ? AND image_id IN (?)',
-      [experience_id, parsedImagesToDelete]
-    );
-    
-    console.log("Delete result:", deleteResult);
-    console.log("Number of images deleted:", deleteResult.affectedRows);
-
-    // Optional: Delete physical files
-    const fs = require('fs').promises;
-    const path = require('path');
-    for (const img of imagesToDelete) {
+    if (images_to_delete) {
+      let parsedImagesToDelete;
       try {
-        const filePath = path.join(__dirname, '..', img.image_url);
-        await fs.unlink(filePath);
-        console.log("Physical file deleted:", filePath);
-      } catch (err) {
-        console.error(`Failed to delete file ${img.image_url}:`, err.message);
+        parsedImagesToDelete = typeof images_to_delete === 'string' 
+          ? JSON.parse(images_to_delete) 
+          : images_to_delete;
+        
+        console.log("Received images_to_delete:", images_to_delete);
+        console.log("Parsed images to delete:", parsedImagesToDelete);
+      } catch (e) {
+        console.error("Failed to parse images_to_delete:", e);
+        parsedImagesToDelete = Array.isArray(images_to_delete) ? images_to_delete : [];
+      }
+
+      if (Array.isArray(parsedImagesToDelete) && parsedImagesToDelete.length > 0) {
+        console.log("Deleting images with IDs:", parsedImagesToDelete, "from experience:", experience_id);
+        
+        const [imagesToDelete] = await connection.query(
+          'SELECT image_id, image_url FROM experience_images WHERE experience_id = ? AND image_id IN (?)',
+          [experience_id, parsedImagesToDelete]
+        );
+        
+        console.log("Images found to delete:", imagesToDelete);
+
+        const [deleteResult] = await connection.query(
+          'DELETE FROM experience_images WHERE experience_id = ? AND image_id IN (?)',
+          [experience_id, parsedImagesToDelete]
+        );
+        
+        console.log("Delete result:", deleteResult);
+        console.log("Number of images deleted:", deleteResult.affectedRows);
+
+        const fs = require('fs').promises;
+        const path = require('path');
+        for (const img of imagesToDelete) {
+          try {
+            const filePath = path.join(__dirname, '..', img.image_url);
+            await fs.unlink(filePath);
+            console.log("Physical file deleted:", filePath);
+          } catch (err) {
+            console.error(`Failed to delete file ${img.image_url}:`, err.message);
+          }
+        }
+      } else {
+        console.log("No valid images to delete");
       }
     }
-  } else {
-    console.log("No valid images to delete");
-  }
-}
 
-    // Handle new image uploads
     if (files && files.length > 0) {
       const imageValues = files.map(file => {
         const filename = file.path.split('\\').pop().split('/').pop();
@@ -2111,20 +2137,16 @@ if (images_to_delete) {
       );
     }
 
-    // Commit transaction
     await connection.commit();
     connection.release();
 
-    // Fetch updated data to return
     const [updatedExperience] = await db.query(
       'SELECT * FROM experience WHERE experience_id = ?',
       [experience_id]
     );
 
-    // Parse travel_companions for response
     const experience = updatedExperience[0];
     if (experience.travel_companions) {
-      // MySQL returns JSON as parsed array already
       if (!Array.isArray(experience.travel_companions)) {
         try {
           experience.travel_companions = JSON.parse(experience.travel_companions);
@@ -2138,13 +2160,11 @@ if (images_to_delete) {
       experience.travel_companions = [];
     }
 
-    // Fetch destination info
     const [destinationInfo] = await db.query(
       'SELECT * FROM destination WHERE destination_id = ?',
       [experience.destination_id]
     );
     
-    // Fetch availability
     const [availabilityRecords] = await db.query(
       'SELECT * FROM experience_availability WHERE experience_id = ?',
       [experience_id]
@@ -2163,13 +2183,11 @@ if (images_to_delete) {
       });
     }
 
-    // Fetch tags
     const [tagRecords] = await db.query(
       'SELECT t.tag_id, t.name FROM tags t JOIN experience_tags et ON t.tag_id = et.tag_id WHERE et.experience_id = ?',
       [experience_id]
     );
 
-    // Fetch images
     const [imageRecords] = await db.query(
       'SELECT * FROM experience_images WHERE experience_id = ?',
       [experience_id]
@@ -2191,7 +2209,6 @@ if (images_to_delete) {
     res.status(500).json({ error: 'Server error', details: err.message });
   }
 };
-
 const updateExperienceSection = async (req, res) => {
   const { experience_id } = req.params;
   const { section } = req.body; // 'basic', 'availability', 'tags', 'destination', 'images'
