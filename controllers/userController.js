@@ -107,75 +107,108 @@ const getUserById = async (req, res) => {
   }
 };
 
+
 const updateUser = async (req, res) => {
+  const { user_id } = req.params;
+  const { 
+    first_name, 
+    last_name, 
+    email, 
+    mobile_number,
+    current_password,  // Only needed if changing password
+    new_password       // Only needed if changing password
+  } = req.body;
+
   try {
-    const { id } = req.params;
-    const { first_name, last_name, email, password, role } = req.body;
-    
-    // Check if user exists
-    const [existing] = await db.query('SELECT * FROM users WHERE user_id = ?', [id]);
+    // Verify user exists
+    const [existing] = await db.query('SELECT * FROM users WHERE user_id = ?', [user_id]);
     if (existing.length === 0) {
-      // If there's an uploaded file, remove it since user doesn't exist
-      if (req.file) {
-        fs.unlinkSync(req.file.path);
-      }
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Hash new password if provided
-    let hashedPassword = existing[0].password; // keep existing if no new one
-    if (password) {
-      hashedPassword = await bcrypt.hash(password, 10);
-    }
-    
-    // Handle profile picture
-    let profilePicPath = existing[0].profile_pic; // Keep existing if no new one
-    
-    if (req.file) {
-      // If we have a new profile pic
-      profilePicPath = req.file.path.replace(/\\/g, '/'); // Normalize path for all OS
-      
-      // Remove old profile pic if it exists and is not the default
-      if (existing[0].profile_pic && !existing[0].profile_pic.includes('default-profile.jpg')) {
-        try {
-          fs.unlinkSync(existing[0].profile_pic);
-        } catch (err) {
-          console.error('Failed to delete old profile pic:', err);
-          // Continue with update even if delete fails
-        }
+    // Check if email is being changed and if it's already taken
+    if (email && email !== existing[0].email) {
+      const [emailCheck] = await db.query(
+        'SELECT * FROM users WHERE email = ? AND user_id != ?', 
+        [email, user_id]
+      );
+      if (emailCheck.length > 0) {
+        return res.status(409).json({ message: 'Email already in use' });
       }
     }
+
+    // Build dynamic update query
+    const updates = [];
+    const values = [];
+
+    if (first_name) {
+      updates.push('first_name = ?');
+      values.push(first_name);
+    }
+    if (last_name) {
+      updates.push('last_name = ?');
+      values.push(last_name);
+    }
+    if (email) {
+      updates.push('email = ?');
+      values.push(email);
+    }
+    if (mobile_number !== undefined) {
+      updates.push('mobile_number = ?');
+      values.push(mobile_number);
+    }
+
+    // Handle profile picture upload
+    if (req.file) {
+      updates.push('profile_pic = ?');
+      values.push(req.file.path);
+    }
+
+    // Handle password update (if both current and new are provided)
+    if (current_password && new_password) {
+      // Verify current password
+      const isMatch = await bcrypt.compare(current_password, existing[0].password);
+      if (!isMatch) {
+        return res.status(401).json({ message: 'Current password is incorrect' });
+      }
+
+      if (new_password.length < 8) {
+        return res.status(400).json({ message: 'Password must be at least 8 characters' });
+      }
+
+      // Hash and add to update
+      const hashedPassword = await bcrypt.hash(new_password, 10);
+      updates.push('password = ?');
+      values.push(hashedPassword);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ message: 'No fields to update' });
+    }
+
+    values.push(user_id);
 
     // Update user
     await db.query(
-      `UPDATE users 
-       SET first_name = ?, last_name = ?, email = ?, password = ?, role = ?, profile_pic = ? 
-       WHERE user_id = ?`,
-      [
-        first_name || existing[0].first_name,
-        last_name || existing[0].last_name,
-        email || existing[0].email,
-        hashedPassword,
-        role || existing[0].role,
-        profilePicPath,
-        id
-      ]
+      `UPDATE users SET ${updates.join(', ')} WHERE user_id = ?`,
+      values
+    );
+
+    // Fetch updated user data (excluding password)
+    const [updatedUser] = await db.query(
+      'SELECT user_id, first_name, last_name, email, mobile_number, profile_pic, role, created_at FROM users WHERE user_id = ?',
+      [user_id]
     );
 
     res.status(200).json({ 
+      success: true,
       message: 'User updated successfully',
-      user: {
-        user_id: id,
-        first_name: first_name || existing[0].first_name,
-        last_name: last_name || existing[0].last_name,
-        email: email || existing[0].email,
-        role: role || existing[0].role,
-        profile_pic: profilePicPath
-      }
+      user: updatedUser[0],
+      profile_pic_path: updatedUser[0].profile_pic
     });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to update user', details: err.message });
+    console.error('Update user error:', err);
+    res.status(500).json({ error: 'Server error' });
   }
 };
 
@@ -242,8 +275,42 @@ const getUserStats = async (req, res) => {
     });
   }
 };
+const getAdminDashboardStats = async (req, res) => {
+   try {
+     // 1. Count active experiences
+      const [activeExperiences] = await db.query(` SELECT COUNT(*) as count FROM experience WHERE status = 'active' `);
+     // 2. Count pending experiences
+        const [pendingExperiences] = await db.query(` SELECT COUNT(*) as count FROM experience WHERE status = 'pending' `);
+     // 3. Count active creators 
+      const [activeCreators] = await db.query(`
+      SELECT COUNT(DISTINCT u.user_id) as count 
+      FROM users u
+      JOIN experience e ON u.user_id = e.creator_id 
+      WHERE u.role = 'creator' AND e.status = 'active' 
+    `); 
+    // 4. Count pending creators 
+      const [pendingCreators] = await db.query(`
+         SELECT COUNT(DISTINCT u.user_id) as count 
+         FROM users u WHERE u.role = 'creator' 
+         AND u.user_id IN ( SELECT DISTINCT creator_id FROM experience WHERE status IN ('pending', 'draft') ) 
+         AND u.user_id NOT IN ( SELECT DISTINCT creator_id FROM experience WHERE status = 'active' ) `);
+          // 5. 
+         res.status(200).json({ 
+          success: true, 
+          stats: { 
+            activeExperiences: {
+               count: activeExperiences[0].count, 
+               percentageChange: null
+              },
+                pendingExperiences: {
+               count: pendingExperiences[0].count 
+              }, activeCreators: { 
+                count: activeCreators[0].count, 
+                percentageChange: null },
+               pendingCreators: { 
+                count: pendingCreators[0].count } } }); } catch (error) { console.error('Error fetching admin dashboard stats:', error); res.status(500).json({ success: false, message: 'Failed to fetch dashboard statistics' }); }
+ };
 
 
 
-
-module.exports = { upload, registerUser, getAllUsers, getUserById,getUserStats, updateUser  };
+module.exports = { upload, registerUser, getAllUsers, getUserById,getUserStats,getAdminDashboardStats, updateUser  };

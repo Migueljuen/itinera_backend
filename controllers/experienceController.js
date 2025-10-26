@@ -40,17 +40,13 @@ const upload = multer({
 
 const createExperience = async (req, res) => {
   // Extract destination and experience data from request body
-  const { 
-    // Experience data
+const { 
     creator_id, title, description, price, unit, availability, tags, status,
-
-    // Destination data
+    category_id, 
     destination_name, city, destination_description, latitude, longitude,
-
-    // Option to use existing destination
     destination_id,
-    travel_companions // Array of companions
-  } = req.body;
+    travel_companions
+} = req.body;
 
   // Get uploaded files if any
   const files = req.files;
@@ -74,7 +70,7 @@ const createExperience = async (req, res) => {
     }
 
     // Validate 'status' value if provided
-    const validStatuses = ['draft', 'inactive', 'active'];
+    const validStatuses = ['draft', 'inactive', 'active', 'pending'];
     const experienceStatus = status || 'draft';
     if (!validStatuses.includes(experienceStatus)) {
       await connection.rollback();
@@ -203,12 +199,12 @@ const createExperience = async (req, res) => {
     }
 
     // Insert new experience with JSON travel_companions
-    const [result] = await connection.query(
-      `INSERT INTO experience 
-      (creator_id, destination_id, title, description, price, unit, status, travel_companions, created_at) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURDATE())`,
-      [creator_id, finalDestinationId, title || null, description || null, price, unit, experienceStatus, JSON.stringify(parsedCompanions)]
-    );
+const [result] = await connection.query(
+  `INSERT INTO experience 
+  (creator_id, destination_id, title, description, price, unit, status, travel_companions, category_id, created_at) 
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURDATE())`,
+  [creator_id, finalDestinationId, title || null, description || null, price, unit, experienceStatus, JSON.stringify(parsedCompanions), category_id]
+);
 
     const experience_id = result.insertId;
 
@@ -329,6 +325,7 @@ const createExperience = async (req, res) => {
       message: 'Experience and destination created successfully',
       experience_id,
       destination_id: finalDestinationId,
+         category_id,
       destination: destinationInfo[0],
       availability: processedAvailability,
       tags: tagRecords,
@@ -388,7 +385,7 @@ const createMultipleExperiences = async (req, res) => {
         }
 
         // Validate 'status' value if provided
-        const validStatuses = ['draft', 'inactive', 'active'];
+        const validStatuses = ['draft', 'inactive', 'active', 'pending'];
         const experienceStatus = status || 'draft';
         if (!validStatuses.includes(experienceStatus)) {
           throw new Error(`Experience ${i + 1}: Invalid status value`);
@@ -1201,6 +1198,7 @@ const getAllExperience = async (req, res) => {
     res.status(500).json({ message: 'Failed to fetch experiences' });
   }
 };
+
 const getExperienceTitlesAndTags = async (req, res) => {
   try {
     // Optional query: location or tags
@@ -1629,6 +1627,66 @@ const getActiveExperience = async (req, res) => {
   }
 };
 
+const getPendingExperience = async (req, res) => {
+  try {
+    // 1. Fetch active experiences with destination info and tags
+    const [experiences] = await db.query(`
+      SELECT 
+        e.experience_id AS id,
+        e.title,
+        e.description,
+        e.price,
+        e.unit,
+        d.name AS destination_name,
+        d.city AS location,
+        GROUP_CONCAT(t.name) AS tags
+      FROM experience e
+      JOIN destination d ON e.destination_id = d.destination_id
+      LEFT JOIN experience_tags et ON e.experience_id = et.experience_id
+      LEFT JOIN tags t ON et.tag_id = t.tag_id
+      WHERE e.status = 'pending'
+      GROUP BY e.experience_id
+    `);
+
+    // 2. Fetch all images
+    const [images] = await db.query(`
+      SELECT 
+        experience_id,
+        image_url
+      FROM experience_images
+    `);
+
+    // 3. Map images by experience_id
+    const imageMap = {};
+    images.forEach(img => {
+      if (!imageMap[img.experience_id]) {
+        imageMap[img.experience_id] = [];
+      }
+
+      let webPath = img.image_url;
+      if (webPath.includes(':\\') || webPath.includes('\\')) {
+        const filename = webPath.split('\\').pop();
+        webPath = `uploads/experiences/${filename}`;
+      }
+
+      imageMap[img.experience_id].push(webPath);
+    });
+
+    // 4. Attach tags and images
+    experiences.forEach(exp => {
+      exp.tags = exp.tags ? exp.tags.split(',') : [];
+      exp.images = imageMap[exp.id] || [];
+    });
+
+    // 5. Return the result
+    res.status(200).json(experiences);
+
+  } catch (error) {
+    console.error('Error fetching active experiences:', error);
+    res.status(500).json({ message: 'Failed to fetch active experiences' });
+  }
+};
+
 const getExperienceByUserID = async (req, res) => {
   const { user_id } = req.params;
 
@@ -1824,7 +1882,7 @@ const updateExperience = async (req, res) => {
 
     if (status !== undefined) {
       // Validate status
-      const validStatuses = ['draft', 'inactive', 'active'];
+      const validStatuses = ['draft', 'inactive', 'active', 'pending'];
       if (!validStatuses.includes(status)) {
         await connection.rollback();
         return res.status(400).json({ message: 'Invalid status value' });
@@ -2455,4 +2513,4 @@ const updateExperienceStatus = async (req, res) => {
 
 
 
-module.exports = { upload, createExperienceHandler: [upload.array('images', 5), createExperience], createExperience, createMultipleExperiences, getAllExperience, getExperienceTitlesAndTags,getExperienceAvailability, getExperienceById, getAvailableTimeSlots, updateExperience,updateExperienceSection,updateExperienceStatus, getExperienceByUserID, getActiveExperience };
+module.exports = { upload, createExperienceHandler: [upload.array('images', 5), createExperience], createExperience, createMultipleExperiences, getAllExperience, getExperienceTitlesAndTags,getExperienceAvailability, getExperienceById, getAvailableTimeSlots, updateExperience,updateExperienceSection,updateExperienceStatus, getExperienceByUserID, getActiveExperience, getPendingExperience };

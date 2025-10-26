@@ -13,7 +13,7 @@ const {
     updateExperience, 
     updateExperienceSection,
     updateExperienceStatus, 
-    
+    getPendingExperience,
     getActiveExperience, 
     getSavedExperiences, 
     getExperienceByUserID
@@ -31,7 +31,7 @@ router.get('/:id/availability', getExperienceAvailability);
 router.get('/', getAllExperience); 
 router.get('/titletag', getExperienceTitlesAndTags); 
 router.get('/active', getActiveExperience);
-
+router.get('/pending', getPendingExperience);
 // Full update route
 router.put('/:experience_id', upload.array('images'), updateExperience);
 
