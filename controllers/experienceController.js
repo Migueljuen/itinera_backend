@@ -40,13 +40,14 @@ const upload = multer({
 
 const createExperience = async (req, res) => {
   // Extract destination and experience data from request body
-const { 
-    creator_id, title, description, price, unit, availability, tags, status,
+  const { 
+    creator_id, title, description, notes, price, unit, availability, tags, status,
     category_id, 
     destination_name, city, destination_description, latitude, longitude,
     destination_id,
     travel_companions
-} = req.body;
+  } = req.body;
+
 
   // Get uploaded files if any
   const files = req.files;
@@ -198,13 +199,13 @@ const {
       }
     }
 
-    // Insert new experience with JSON travel_companions
-const [result] = await connection.query(
-  `INSERT INTO experience 
-  (creator_id, destination_id, title, description, price, unit, status, travel_companions, category_id, created_at) 
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURDATE())`,
-  [creator_id, finalDestinationId, title || null, description || null, price, unit, experienceStatus, JSON.stringify(parsedCompanions), category_id]
-);
+    // Insert new experience
+  const [result] = await connection.query(
+    `INSERT INTO experience 
+    (creator_id, destination_id, title, description, notes, price, unit, status, travel_companions, category_id, created_at) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURDATE())`,
+    [creator_id, finalDestinationId, title || null, description || null, notes || null, price, unit, experienceStatus, JSON.stringify(parsedCompanions), category_id]
+  );
 
     const experience_id = result.insertId;
 
@@ -331,7 +332,8 @@ const [result] = await connection.query(
       tags: tagRecords,
       images: imageRecords || [],
       travel_companions: parsedCompanions, // Return as array
-      status: experienceStatus
+      status: experienceStatus,
+       notes: notes || null 
     });
   } catch (err) {
     await connection.rollback();
@@ -1469,30 +1471,30 @@ const getExperienceById = async (req, res) => {
     experience.tags = tagRows.map(tag => tag.name);
 
     // Fetch images associated with the experience
-const [imageRows] = await db.query(
-  `SELECT image_id, image_url FROM experience_images WHERE experience_id = ?`,
-  [id]
-);
+    const [imageRows] = await db.query(
+      `SELECT image_id, image_url FROM experience_images WHERE experience_id = ?`,
+      [id]
+    );
 
-    
-experience.images = imageRows.map(img => {
-  // If image_url already contains the full path, use it
-  // Otherwise, extract filename and construct path
-  let imageUrl = img.image_url;
-  
-  // If it's an absolute path, extract just the filename
-  if (imageUrl.includes('\\') || imageUrl.includes('/')) {
-    const filename = path.basename(imageUrl);
-    imageUrl = `uploads/experiences/${filename}`;
-  }
-  
-  // Return object with image_id and image_url
-  return {
-    image_id: img.image_id,
-    image_url: imageUrl, // No leading slash
-    experience_id: id
-  };
-});
+    experience.images = imageRows.map(img => {
+      // If image_url already contains the full path, use it
+      // Otherwise, extract filename and construct path
+      let imageUrl = img.image_url;
+      
+      // If it's an absolute path, extract just the filename
+      if (imageUrl.includes('\\') || imageUrl.includes('/')) {
+        const filename = path.basename(imageUrl);
+        imageUrl = `uploads/experiences/${filename}`;
+      }
+      
+      // Return object with image_id and image_url
+      return {
+        image_id: img.image_id,
+        image_url: imageUrl, // No leading slash
+        experience_id: id
+      };
+    });
+
     // Fetch availability data
     const [availabilityRows] = await db.query(
       `SELECT 
@@ -1559,6 +1561,12 @@ experience.images = imageRows.map(img => {
     delete experience.destination_longitude;
     delete experience.destination_latitude;
     delete experience.destination_description;
+
+    // Ensure notes and category_id are included in response
+    // (they're already in the experience object from the SELECT e.*)
+    // Just making sure they're properly handled
+    experience.notes = experience.notes || null;
+    experience.category_id = experience.category_id || null;
 
     res.json(experience);
   } catch (err) {
@@ -1807,7 +1815,7 @@ const updateExperience = async (req, res) => {
   const { experience_id } = req.params;
   const { 
     // Experience data
-    title, description, price, unit, status, 
+    title, description, notes, price, unit, status, 
     travel_companion, // Keep for backward compatibility
     travel_companions, // New array field
     
@@ -1862,6 +1870,12 @@ const updateExperience = async (req, res) => {
     if (description !== undefined) {
       updateFields.push('description = ?');
       updateValues.push(description);
+    }
+
+    // Handle notes update
+    if (notes !== undefined) {
+      updateFields.push('notes = ?');
+      updateValues.push(notes || null);
     }
 
     if (price !== undefined) {

@@ -3,7 +3,7 @@ require('dotenv').config();
 const db = require('../config/db.js');
 
 
-// Create a new tag
+// Create new tags
 const createTag = async (req, res) => {
   const { tags } = req.body;
 
@@ -12,33 +12,78 @@ const createTag = async (req, res) => {
   }
 
   try {
-    // Using a transaction to ensure atomicity if inserting multiple tags
     await db.query('START TRANSACTION');
 
-    // Insert each tag into the database
+    const createdTags = [];
+
     for (const tag of tags) {
-      if (!tag.name) {
-        // If any tag doesn't have a name, return an error
+      const { name, category_id } = tag;
+
+      if (!name || !category_id) {
         await db.query('ROLLBACK');
-        return res.status(400).json({ message: 'Tag name is required for each tag' });
+        return res.status(400).json({
+          message: 'Each tag must have a name and category_id'
+        });
       }
-      await db.query('INSERT INTO tags (name) VALUES (?)', [tag.name]);
+
+      // Check if the tag already exists in this category
+      const [existing] = await db.query(
+        'SELECT tag_id, name, category_id, is_default FROM tags WHERE name = ? AND category_id = ? LIMIT 1',
+        [name, category_id]
+      );
+
+      if (existing.length > 0) {
+        const existingTag = existing[0];
+
+        if (existingTag.is_default === 0) {
+          // ✅ Tag already exists and is user-created, reuse it
+          createdTags.push(existingTag);
+          continue;
+        } else {
+          // ❌ Tag is a default tag — duplicate creation not allowed
+          await db.query('ROLLBACK');
+          return res.status(400).json({
+            message: `Tag "${name}" already exists in this category`
+          });
+        }
+      }
+
+      // Insert a new tag (user-created tag => is_default = 0)
+      const [result] = await db.query(
+        'INSERT INTO tags (name, category_id, is_default) VALUES (?, ?, 0)',
+        [name, category_id]
+      );
+
+      createdTags.push({
+        tag_id: result.insertId,
+        name,
+        category_id,
+        is_default: 0
+      });
     }
 
     await db.query('COMMIT');
-    res.status(201).json({ message: 'Tags created successfully' });
+
+    res.status(201).json({
+      message: 'Tags created or selected successfully',
+      tags: createdTags
+    });
+
   } catch (err) {
-    console.error(err);
+    console.error('Error creating tags:', err);
     await db.query('ROLLBACK');
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Server error while creating tags' });
   }
 };
+
+
+
 
 
 // Get all tags
 const getAllTags = async (req, res) => {
   try {
-    const [tags] = await db.query('SELECT * FROM tags');
+    const [tags] = await db.query('SELECT * FROM tags where is_default = 1');
     res.status(200).json({ tags });
   } catch (err) {
     console.error(err);

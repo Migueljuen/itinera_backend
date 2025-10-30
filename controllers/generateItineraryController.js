@@ -345,39 +345,52 @@ const saveItinerary = async (req, res) => {
     // Step 4: Get full saved itinerary with details
     const savedItinerary = await getItineraryWithDetails(itinerary_id);
 
-    // Step 5: Notifications
-    try {
-      const destinationInfo = await getDestinationInfo(savedItinerary);
+// Step 5: Notifications
+try {
+  const destinationInfo = await getDestinationInfo(savedItinerary);
 
-      // Send notification to traveler
+  // Send notification to traveler
+  await notificationService.createNotification({
+    user_id: traveler_id,
+    type: 'update',
+    title: `Trip to ${destinationInfo.name || title} Saved!`,
+    description: 'Your itinerary has been created successfully. We\'ll remind you when it\'s time to pack!',
+    itinerary_id: itinerary_id,
+    icon: 'checkmark-circle',
+    icon_color: '#10B981',
+    created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
+  });
+
+  // Send separate notification for each booked experience to its creator
+  for (const item of items) {
+    // Get experience details and creator_id
+    const [experienceRows] = await db.query(
+      `SELECT e.title, e.creator_id 
+       FROM experience e 
+       WHERE e.experience_id = ?`,
+      [item.experience_id]
+    );
+
+    if (experienceRows.length > 0) {
+      const { title: experienceTitle, creator_id } = experienceRows[0];
+      const bookingDate = dayjs(start_date).add(item.day_number - 1, 'day').format('MMM DD, YYYY');
+
       await notificationService.createNotification({
-        user_id: traveler_id,
-        type: 'update',
-        title: `Trip to ${destinationInfo.name || title} Saved!`,
-        description: 'Your itinerary has been created successfully. We\'ll remind you when it\'s time to pack!',
+        user_id: creator_id,
+        type: 'booking',
+        title: 'New Booking Received!',
+        description: `You have a new booking for "${experienceTitle}" on ${bookingDate}`,
         itinerary_id: itinerary_id,
-        icon: 'checkmark-circle',
-        icon_color: '#10B981',
+        icon: 'calendar',
+        icon_color: '#3B82F6',
         created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
       });
-
-      // Send notifications to all unique creators
-      for (const creator_id of creatorIds) {
-        await notificationService.createNotification({
-          user_id: creator_id,
-          type: 'booking',
-          title: 'New Booking Received!',
-          description: `You have a new booking for ${destinationInfo.name || title} on ${dayjs(start_date).format('MMM DD, YYYY')}`,
-          itinerary_id: itinerary_id,
-          icon: 'calendar',
-          icon_color: '#3B82F6',
-          created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
-        });
-      }
-
-    } catch (notificationError) {
-      console.error('Error creating notifications:', notificationError);
     }
+  }
+
+} catch (notificationError) {
+  console.error('Error creating notifications:', notificationError);
+}
 
     res.status(201).json({
       message: 'Itinerary saved successfully',

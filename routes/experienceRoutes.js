@@ -38,7 +38,7 @@ router.put('/:experience_id', upload.array('images'), updateExperience);
 // Section-based update route (for updating specific parts)
 router.put('/:experience_id/section', upload.array('images'), updateExperienceSection);
 
-// CHANGED: Use PATCH instead of PUT to match your React Native code
+
 router.patch('/:experience_id/status', updateExperienceStatus);
 
 router.get('/:id', getExperienceById); // LAST!
