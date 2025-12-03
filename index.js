@@ -60,6 +60,10 @@ app.use('/api', authRoutes);
 const notificationRoutes = require('./routes/notificationRoutes');
 app.use('/notifications', notificationRoutes);
 
+// Review
+const reviewRoutes   = require('./routes/reviewRoutes');
+app.use('/reviews', reviewRoutes);
+
 // Start server
 app.listen(port, '0.0.0.0', () => {
   console.log(`Server running on http://localhost:${port}`);

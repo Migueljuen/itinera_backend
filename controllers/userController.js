@@ -159,10 +159,13 @@ const updateUser = async (req, res) => {
     }
 
     // Handle profile picture upload
-    if (req.file) {
-      updates.push('profile_pic = ?');
-      values.push(req.file.path);
-    }
+if (req.file) {
+
+  const normalizedPath = req.file.path.replace(/\\/g, "/");
+  updates.push('profile_pic = ?');
+  values.push(normalizedPath);
+}
+
 
     // Handle password update (if both current and new are provided)
     if (current_password && new_password) {
