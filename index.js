@@ -4,6 +4,12 @@ const port = 3000;
 const app = express();
 const path = require('path');
 
+
+const dotenv = require ("dotenv");
+dotenv.config();
+
+
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -63,6 +69,10 @@ app.use('/notifications', notificationRoutes);
 // Review
 const reviewRoutes   = require('./routes/reviewRoutes');
 app.use('/reviews', reviewRoutes);
+
+const passwordResetRoutes =  require("./routes/passwordResetRoutes");
+app.use("/password-reset", passwordResetRoutes);
+
 
 // Start server
 app.listen(port, '0.0.0.0', () => {
