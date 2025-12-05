@@ -303,7 +303,32 @@ const updateTravelerAttendance = async (req, res) => {
   }
 };
 
+ // NEW: NOT IMPLEMENTED YET
+const notifyCreatorsAfterPayment = async (itinerary_id) => {
+  const [items] = await db.query(
+    `SELECT ii.experience_id, e.title, e.creator_id, i.start_date
+     FROM itinerary_items ii
+     JOIN experience e ON ii.experience_id = e.experience_id
+     JOIN itinerary i ON ii.itinerary_id = i.itinerary_id
+     WHERE ii.itinerary_id = ?`,
+    [itinerary_id]
+  );
 
+  for (const item of items) {
+    const bookingDate = dayjs(item.start_date).add(item.day_number - 1, 'day').format('MMM DD, YYYY');
+
+    await notificationService.createNotification({
+      user_id: item.creator_id,
+      type: 'booking',
+      title: 'New Booking Received!',
+      description: `You have a new booking for "${item.title}" on ${bookingDate}`,
+      itinerary_id,
+      icon: 'calendar',
+      icon_color: '#3B82F6',
+      created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
+    });
+  }
+};
 
 
 

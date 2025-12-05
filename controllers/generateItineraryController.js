@@ -47,7 +47,7 @@ const generateItinerary = async (req, res) => {
   } = req.body;
 
   // Debug: Log the entire request body
-  console.log('Request body received:', JSON.stringify(req.body, null, 2));
+  console.log('MAEDEIN:', JSON.stringify(req.body, null, 2));
 
   // Handle travel companions - support both old and new format
   let companionsToUse = [];
@@ -247,6 +247,164 @@ const generateItinerary = async (req, res) => {
   }
 };
 
+// const saveItinerary = async (req, res) => {
+//   const {
+//     traveler_id,
+//     start_date,
+//     end_date,
+//     title,
+//     notes,
+//     items // Array of itinerary items from preview
+//   } = req.body;
+
+//   if (!traveler_id || !start_date || !end_date || !title || !items || !Array.isArray(items)) {
+//     return res.status(400).json({ 
+//       message: 'Missing required fields for saving itinerary',
+//       required: ['traveler_id', 'start_date', 'end_date', 'title', 'items']
+//     });
+//   }
+
+//   try {
+//     // Step 1: Create the itinerary record
+//     const [result] = await db.query(
+//       `INSERT INTO itinerary (traveler_id, start_date, end_date, title, notes, created_at, status)
+//        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+//       [
+//         traveler_id, 
+//         start_date, 
+//         end_date, 
+//         title, 
+//         notes || 'Auto-generated itinerary', 
+//         dayjs().format('YYYY-MM-DD HH:mm:ss'), 
+//         'upcoming'
+//       ]
+//     );
+
+//     const itinerary_id = result.insertId;
+
+//     // Step 2: Insert itinerary items + Step 3: Auto-create bookings
+//     const creatorIds = new Set(); // To collect unique creator IDs
+
+//     for (const item of items) {
+//       // Insert itinerary item
+//       const [itemResult] = await db.query(
+//         `INSERT INTO itinerary_items 
+//           (itinerary_id, experience_id, day_number, start_time, end_time, custom_note, created_at, updated_at)
+//          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+//         [
+//           itinerary_id,
+//           item.experience_id,
+//           item.day_number,
+//           item.start_time,
+//           item.end_time,
+//           item.custom_note || '',
+//           dayjs().format('YYYY-MM-DD HH:mm:ss'),
+//           dayjs().format('YYYY-MM-DD HH:mm:ss')
+//         ]
+//       );
+
+//       const item_id = itemResult.insertId;
+
+//       // Find creator of the experience
+//       const [creatorRows] = await db.query(
+//         `SELECT creator_id FROM experience WHERE experience_id = ?`,
+//         [item.experience_id]
+//       );
+
+//       if (creatorRows.length > 0) {
+//         const creator_id = creatorRows[0].creator_id;
+//         creatorIds.add(creator_id); // Collect unique creator IDs
+
+//         // Calculate the actual booking date based on itinerary start date and day number
+//         const bookingDate = dayjs(start_date).add(item.day_number - 1, 'day').format('YYYY-MM-DD');
+
+//         // Insert booking automatically with calculated booking date + generated times
+//         await db.query(
+//           `INSERT INTO bookings 
+//             (itinerary_id, item_id, experience_id, traveler_id, creator_id, status, payment_status, 
+//              booking_date, generated_start_time, generated_end_time, created_at, updated_at)
+//            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+//           [
+//             itinerary_id,
+//             item_id,
+//             item.experience_id,
+//             traveler_id,
+//             creator_id,
+//             'Pending',        // auto-confirmed booking
+//             'Unpaid',           // default until manually updated
+//             bookingDate,        // calculated booking date
+//             item.start_time,    // generated start time
+//             item.end_time,      // generated end time
+//             dayjs().format('YYYY-MM-DD HH:mm:ss'),
+//             dayjs().format('YYYY-MM-DD HH:mm:ss')
+//           ]
+//         );
+//       }
+//     }
+
+//     // Step 4: Get full saved itinerary with details
+//     const savedItinerary = await getItineraryWithDetails(itinerary_id);
+
+// // Step 5: Notifications
+// try {
+//   const destinationInfo = await getDestinationInfo(savedItinerary);
+
+//   // Send notification to traveler
+// await notificationService.createNotification({
+//   user_id: traveler_id,
+//   type: 'update',
+//   title: `Trip to ${destinationInfo.name || title} Saved!`,
+//   description: 'Your itinerary has been created successfully. Payment is pending. Once your payment is confirmed, the creators will be notified.',
+//   itinerary_id: itinerary_id,
+//   icon: 'checkmark-circle',
+//   icon_color: '#10B981',
+//   created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
+// });
+
+
+//   // Send separate notification for each booked experience to its creator
+//   // for (const item of items) {
+//   //   // Get experience details and creator_id
+//   //   const [experienceRows] = await db.query(
+//   //     `SELECT e.title, e.creator_id 
+//   //      FROM experience e 
+//   //      WHERE e.experience_id = ?`,
+//   //     [item.experience_id]
+//   //   );
+
+//   //   if (experienceRows.length > 0) {
+//   //     const { title: experienceTitle, creator_id } = experienceRows[0];
+//   //     const bookingDate = dayjs(start_date).add(item.day_number - 1, 'day').format('MMM DD, YYYY');
+
+//   //     await notificationService.createNotification({
+//   //       user_id: creator_id,
+//   //       type: 'booking',
+//   //       title: 'New Booking Received!',
+//   //       description: `You have a new booking for "${experienceTitle}" on ${bookingDate}`,
+//   //       itinerary_id: itinerary_id,
+//   //       icon: 'calendar',
+//   //       icon_color: '#3B82F6',
+//   //       created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
+//   //     });
+//   //   }
+//   // }
+
+// } catch (notificationError) {
+//   console.error('Error creating notifications:', notificationError);
+// }
+
+//     res.status(201).json({
+//       message: 'Itinerary saved successfully',
+//       itinerary_id,
+//       itinerary: savedItinerary
+//     });
+
+//   } catch (err) {
+//     console.error('Error saving itinerary:', err);
+//     res.status(500).json({ error: 'Server error', details: err.message });
+//   }
+// };
+
 const saveItinerary = async (req, res) => {
   const {
     traveler_id,
@@ -282,6 +440,24 @@ const saveItinerary = async (req, res) => {
 
     const itinerary_id = result.insertId;
 
+    // --- Step 1.5: Insert itinerary payment record ---
+    // Calculate total amount from items (assuming each item has a price)
+    const totalAmount = items.reduce((sum, item) => sum + (item.price || 0), 0);
+
+    await db.query(
+      `INSERT INTO itinerary_payments 
+        (itinerary_id, total_amount, amount_paid, payment_status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        itinerary_id,
+        totalAmount,
+        0,                     // nothing paid initially
+        'Unpaid',              // initial status
+        dayjs().format('YYYY-MM-DD HH:mm:ss'),
+        dayjs().format('YYYY-MM-DD HH:mm:ss')
+      ]
+    );
+
     // Step 2: Insert itinerary items + Step 3: Auto-create bookings
     const creatorIds = new Set(); // To collect unique creator IDs
 
@@ -313,12 +489,12 @@ const saveItinerary = async (req, res) => {
 
       if (creatorRows.length > 0) {
         const creator_id = creatorRows[0].creator_id;
-        creatorIds.add(creator_id); // Collect unique creator IDs
+        creatorIds.add(creator_id);
 
-        // Calculate the actual booking date based on itinerary start date and day number
+        // Calculate booking date
         const bookingDate = dayjs(start_date).add(item.day_number - 1, 'day').format('YYYY-MM-DD');
 
-        // Insert booking automatically with calculated booking date + generated times
+        // Insert booking
         await db.query(
           `INSERT INTO bookings 
             (itinerary_id, item_id, experience_id, traveler_id, creator_id, status, payment_status, 
@@ -330,11 +506,11 @@ const saveItinerary = async (req, res) => {
             item.experience_id,
             traveler_id,
             creator_id,
-            'Confirmed',        // auto-confirmed booking
-            'Unpaid',           // default until manually updated
-            bookingDate,        // calculated booking date
-            item.start_time,    // generated start time
-            item.end_time,      // generated end time
+            'Pending',          // booking status
+            'Unpaid',           // booking payment status
+            bookingDate,
+            item.start_time,
+            item.end_time,
             dayjs().format('YYYY-MM-DD HH:mm:ss'),
             dayjs().format('YYYY-MM-DD HH:mm:ss')
           ]
@@ -345,52 +521,24 @@ const saveItinerary = async (req, res) => {
     // Step 4: Get full saved itinerary with details
     const savedItinerary = await getItineraryWithDetails(itinerary_id);
 
-// Step 5: Notifications
-try {
-  const destinationInfo = await getDestinationInfo(savedItinerary);
-
-  // Send notification to traveler
-  await notificationService.createNotification({
-    user_id: traveler_id,
-    type: 'update',
-    title: `Trip to ${destinationInfo.name || title} Saved!`,
-    description: 'Your itinerary has been created successfully. We\'ll remind you when it\'s time to pack!',
-    itinerary_id: itinerary_id,
-    icon: 'checkmark-circle',
-    icon_color: '#10B981',
-    created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
-  });
-
-  // Send separate notification for each booked experience to its creator
-  for (const item of items) {
-    // Get experience details and creator_id
-    const [experienceRows] = await db.query(
-      `SELECT e.title, e.creator_id 
-       FROM experience e 
-       WHERE e.experience_id = ?`,
-      [item.experience_id]
-    );
-
-    if (experienceRows.length > 0) {
-      const { title: experienceTitle, creator_id } = experienceRows[0];
-      const bookingDate = dayjs(start_date).add(item.day_number - 1, 'day').format('MMM DD, YYYY');
+    // Step 5: Notification to traveler only (payment pending)
+    try {
+      const destinationInfo = await getDestinationInfo(savedItinerary);
 
       await notificationService.createNotification({
-        user_id: creator_id,
-        type: 'booking',
-        title: 'New Booking Received!',
-        description: `You have a new booking for "${experienceTitle}" on ${bookingDate}`,
+        user_id: traveler_id,
+        type: 'update',
+        title: `Trip to ${destinationInfo.name || title} Saved!`,
+        description: 'Your itinerary has been created successfully. Payment is pending. Once your payment is confirmed, the creators will be notified.',
         itinerary_id: itinerary_id,
-        icon: 'calendar',
-        icon_color: '#3B82F6',
+        icon: 'checkmark-circle',
+        icon_color: '#10B981',
         created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
       });
-    }
-  }
 
-} catch (notificationError) {
-  console.error('Error creating notifications:', notificationError);
-}
+    } catch (notificationError) {
+      console.error('Error creating notifications:', notificationError);
+    }
 
     res.status(201).json({
       message: 'Itinerary saved successfully',
@@ -405,190 +553,7 @@ try {
 };
 
 
-// const saveItinerary = async (req, res) => {
-//   const {
-//     traveler_id,
-//     start_date,
-//     end_date,
-//     title,
-//     notes,
-//     items // Array of itinerary items from preview
-//   } = req.body;
 
-//   // Validate required fields
-//   if (!traveler_id || !start_date || !end_date || !title || !items || !Array.isArray(items)) {
-//     return res.status(400).json({ 
-//       message: 'Missing required fields for saving itinerary',
-//       required: ['traveler_id', 'start_date', 'end_date', 'title', 'items']
-//     });
-//   }
-
-//   try {
-//     // Step 1: Create the itinerary record
-//     const [result] = await db.query(
-//       `INSERT INTO itinerary (traveler_id, start_date, end_date, title, notes, created_at, status)
-//        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-//       [
-//         traveler_id, 
-//         start_date, 
-//         end_date, 
-//         title, 
-//         notes || 'Auto-generated itinerary', 
-//         dayjs().format('YYYY-MM-DD HH:mm:ss'), 
-//         'upcoming'
-//       ]
-//     );
-
-//     const itinerary_id = result.insertId;
-
-//     // Step 2: Insert itinerary items
-//     if (items.length > 0) {
-//       const itemValues = items.map(item => [
-//         itinerary_id,
-//         item.experience_id,
-//         item.day_number,
-//         item.start_time,
-//         item.end_time,
-//         item.custom_note || '',
-//         dayjs().format('YYYY-MM-DD HH:mm:ss'),
-//         dayjs().format('YYYY-MM-DD HH:mm:ss')
-//       ]);
-
-//       await db.query(
-//         `INSERT INTO itinerary_items 
-//           (itinerary_id, experience_id, day_number, start_time, end_time, custom_note, created_at, updated_at)
-//          VALUES ?`,
-//         [itemValues]
-//       );
-//     }
-
-//     // Step 3: Get the saved itinerary with full details
-//     const savedItinerary = await getItineraryWithDetails(itinerary_id);
-
-//     // Step 4: Create notifications for the saved itinerary
-//     try {
-//       // Get destination info from the first item
-//       const destinationInfo = await getDestinationInfo(savedItinerary);
-      
-//       // Create immediate confirmation notification
-//       await notificationService.createNotification({
-//         user_id: traveler_id,
-//         type: 'update',
-//         title: `Trip to ${destinationInfo.name || title} Saved!`,
-//         description: 'Your itinerary has been created successfully. We\'ll remind you when it\'s time to pack!',
-//         itinerary_id: itinerary_id,
-//         icon: 'checkmark-circle',
-//         icon_color: '#10B981',
-//         created_at: dayjs().format('YYYY-MM-DD HH:mm:ss')
-//       });
-
-//       // Create trip reminder notifications
-//       const tripStartDate = dayjs(start_date);
-//       const now = dayjs();
-      
-//       // 3 days before reminder
-//       const threeDaysBefore = tripStartDate.subtract(3, 'day').hour(9).minute(0).second(0);
-//       if (threeDaysBefore.isAfter(now)) {
-//         await notificationService.createScheduledNotification({
-//           user_id: traveler_id,
-//           type: 'reminder',
-//           title: `Upcoming Trip: ${title}`,
-//           description: 'Your adventure starts in 3 days! Time to start preparing.',
-//           itinerary_id: itinerary_id,
-//           icon: 'calendar',
-//           icon_color: '#3B82F6',
-//           scheduled_for: threeDaysBefore.format('YYYY-MM-DD HH:mm:ss'),
-//           created_at: now.format('YYYY-MM-DD HH:mm:ss')
-//         });
-//       }
-
-//       // 1 day before reminder
-//       const oneDayBefore = tripStartDate.subtract(1, 'day').hour(18).minute(0).second(0);
-//       if (oneDayBefore.isAfter(now)) {
-//         await notificationService.createScheduledNotification({
-//           user_id: traveler_id,
-//           type: 'reminder',
-//           title: `Tomorrow: ${title}`,
-//           description: 'Your trip starts tomorrow! Don\'t forget to check your itinerary and pack everything you need.',
-//           itinerary_id: itinerary_id,
-//           icon: 'airplane',
-//           icon_color: '#4F46E5',
-//           scheduled_for: oneDayBefore.format('YYYY-MM-DD HH:mm:ss'),
-//           created_at: now.format('YYYY-MM-DD HH:mm:ss')
-//         });
-//       }
-
-//       // Create activity reminder notifications for each day
-//       if (items.length > 0) {
-//         // Group items by day
-//         const itemsByDay = items.reduce((acc, item) => {
-//           if (!acc[item.day_number]) {
-//             acc[item.day_number] = [];
-//           }
-//           acc[item.day_number].push(item);
-//           return acc;
-//         }, {});
-
-//         // Create notifications for each day's activities (EXCEPT Day 1 - handled by status update)
-//         for (const [dayNumber, dayItems] of Object.entries(itemsByDay)) {
-//           // Skip Day 1 activity reminders - these are handled when status changes to 'ongoing'
-//           if (parseInt(dayNumber) === 1) continue;
-          
-//           const activityDate = tripStartDate.add(parseInt(dayNumber) - 1, 'day');
-//           const dayBeforeAt7PM = activityDate.subtract(1, 'day').hour(19).minute(0).second(0);
-          
-//           if (dayBeforeAt7PM.isAfter(now) && dayItems.length > 0) {
-//             // Get experience details for the notification
-//             const firstActivity = await getExperienceDetails(dayItems[0].experience_id);
-//             const activityCount = dayItems.length;
-            
-//             await notificationService.createScheduledNotification({
-//               user_id: traveler_id,
-//               type: 'activity',
-//               title: `Day ${dayNumber} Activities Tomorrow`,
-//               description: activityCount === 1 
-//                 ? `${firstActivity?.title || 'Your activity'} starts at ${dayItems[0].start_time}`
-//                 : `${activityCount} activities planned, starting with ${firstActivity?.title || 'your first activity'} at ${dayItems[0].start_time}`,
-//               itinerary_id: itinerary_id,
-//               icon: 'location',
-//               icon_color: '#F59E0B',
-//               scheduled_for: dayBeforeAt7PM.format('YYYY-MM-DD HH:mm:ss'),
-//               created_at: now.format('YYYY-MM-DD HH:mm:ss')
-//             });
-//           }
-//         }
-//       }
-
-//       // REMOVED: Day of trip "Welcome to Your Adventure!" notification
-//       // This is now handled by updateItineraryStatuses when the trip actually starts
-
-//       // Handle edge case: Itinerary created on the same day it starts
-//       if (now.isSame(tripStartDate, 'day')) {
-//         // The status update cron will handle this, but if you want immediate handling:
-//         console.log('📝 Note: Itinerary created on start date. Status update will handle welcome notification.');
-        
-//         // You could optionally trigger a status update here:
-//         // await updateItineraryStatuses();
-//       }
-
-//     } catch (notificationError) {
-//       // Log notification errors but don't fail the entire save operation
-//       console.error('Error creating notifications:', notificationError);
-//       // You might want to track this in an error monitoring service
-//     }
-
-//     res.status(201).json({
-//       message: 'Itinerary saved successfully',
-//       itinerary_id,
-//       itinerary: savedItinerary
-//     });
-
-//   } catch (err) {
-//     console.error('Error saving itinerary:', err);
-//     res.status(500).json({ error: 'Server error', details: err.message });
-//   }
-// };
-// Helper function to get destination info
 const getDestinationInfo = async (itinerary) => {
   try {
     // This depends on your data structure
@@ -682,222 +647,378 @@ const findNonConflictingSlot = (availableTimeSlots, scheduledSlotsForDay) => {
 };
 
 // Enhanced smart itinerary generation with conflict detection
+// const smartItineraryGeneration = async ({
+//   experiences,
+//   totalDays,
+//   experience_types,
+//   explore_time,
+//   travel_companion,
+//   activity_intensity,
+//   travel_distance,
+//   start_date
+// }) => {
+//   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+//   const itinerary = [];
+  
+//   // Determine experiences per day based on activity intensity
+//   const experiencesPerDay = {
+//     'low': 2,
+//     'moderate': 3,
+//     'high': 4
+//   }[activity_intensity.toLowerCase()] || 2;
+
+//   // Parse start date to get day of week for each day
+//   const startDate = dayjs(start_date);
+//   const currentDateTime = dayjs(); // Get current date and time
+//   const currentTimeStr = currentDateTime.format('HH:mm'); // Current time in HH:mm format
+  
+//   console.log(`🗺️ Starting itinerary generation with inclusive ${travel_distance} travel distance preference`);
+//   console.log(`📊 Total experiences available: ${experiences.length}`);
+//   console.log(`⏰ Current time: ${currentTimeStr}`);
+  
+//   for (let day = 1; day <= totalDays; day++) {
+//     const currentDate = startDate.add(day - 1, 'day');
+//     const dayOfWeek = dayNames[currentDate.day()];
+    
+//     // Check if this is today
+//     const isToday = currentDate.isSame(currentDateTime, 'day');
+    
+//     console.log(`📅 Planning day ${day} (${dayOfWeek}) with ${travel_distance} travel distance preference`);
+//     if (isToday) {
+//       console.log(`📍 This is TODAY - will only schedule activities after ${currentTimeStr}`);
+//     }
+    
+//     // Keep track of scheduled time slots for this day to avoid conflicts
+//     const scheduledSlotsForDay = [];
+    
+//     // Filter experiences available on this day of week with their time slots
+//     const availableExperiences = [];
+    
+//     for (const exp of availableExperiences.slice(0, 5)) {
+//   console.log(`   ${exp.title}:`);
+//   exp.availableTimeSlots.forEach(slot => {
+//     console.log(`NIGG      - ${slot.start_time} to ${slot.end_time}`);
+//   });
+// }
+//     for (const experience of experiences) {
+//       const timeSlots = await getExperienceWithAvailability(experience.experience_id, dayOfWeek);
+      
+//       if (timeSlots.length > 0) {
+//         // Filter time slots based on explore_time preference AND current time if today
+//         const filteredTimeSlots = timeSlots.filter(slot => {
+//           const startHour = parseInt(slot.start_time.split(':')[0]);
+          
+//           // First, check if this time slot has already passed today
+//           if (isToday) {
+//             // Compare time strings (HH:mm format)
+//             if (slot.start_time <= currentTimeStr) {
+//               console.log(`⏭️ Skipping ${slot.start_time} - ${slot.end_time} as it's already past current time ${currentTimeStr}`);
+//               return false;
+//             }
+//           }
+          
+//           // Then apply explore_time preference
+//           switch (explore_time) {
+//             case 'Daytime':
+//               return startHour >= 6 && startHour < 18;
+//             case 'Nighttime':
+//               return startHour >= 18 || startHour < 6;
+//             case 'Both':
+//             default:
+//               return true;
+//           }
+//         });
+        
+//         if (filteredTimeSlots.length > 0) {
+//           availableExperiences.push({
+//             ...experience,
+//             availableTimeSlots: filteredTimeSlots
+//           });
+//         }
+//       }
+//     }
+    
+//     console.log(`✅ Available experiences for ${dayOfWeek}: ${availableExperiences.length}`);
+//     if (isToday) {
+//       console.log(`🕐 (Filtered to only include activities after ${currentTimeStr})`);
+//     }
+    
+//     // Select experiences for this day (avoid duplicates across days)
+//     const usedExperienceIds = itinerary.map(item => item.experience_id);
+//     const unusedExperiences = availableExperiences.filter(
+//       exp => !usedExperienceIds.includes(exp.experience_id)
+//     );
+    
+//     console.log(`🔄 Unused experiences for day ${day}: ${unusedExperiences.length}`);
+    
+//     // Apply travel distance-based sorting/prioritization - INCLUSIVE APPROACH
+//     let sortedExperiences = [...unusedExperiences];
+    
+//     if (travel_distance === 'nearby') {
+//       sortedExperiences.sort((a, b) => {
+//         const aDistance = parseFloat(a.distance_from_city_center) || 0;
+//         const bDistance = parseFloat(b.distance_from_city_center) || 0;
+//         return aDistance - bDistance;
+//       });
+//       console.log(`🎯 Prioritizing by shortest distances first (nearby preference - targeting ≤10km experiences)`);
+      
+//     } else if (travel_distance === 'moderate') {
+//       sortedExperiences.sort((a, b) => {
+//         const aDistance = parseFloat(a.distance_from_city_center) || 0;
+//         const bDistance = parseFloat(b.distance_from_city_center) || 0;
+//         const randomFactor = (Math.random() - 0.5) * 3;
+//         return (aDistance - bDistance) + randomFactor;
+//       });
+//       console.log(`⚖️ Prioritizing with balanced mix (moderate preference - targeting ≤20km with variety)`);
+      
+//     } else if (travel_distance === 'far') {
+//       const nearbyExps = sortedExperiences.filter(exp => (parseFloat(exp.distance_from_city_center) || 0) <= 10);
+//       const moderateExps = sortedExperiences.filter(exp => {
+//         const dist = parseFloat(exp.distance_from_city_center) || 0;
+//         return dist > 10 && dist <= 20;
+//       });
+//       const farExps = sortedExperiences.filter(exp => (parseFloat(exp.distance_from_city_center) || 0) > 20);
+//       const nullExps = sortedExperiences.filter(exp => !exp.distance_from_city_center);
+      
+//       sortedExperiences = [
+//         ...farExps.sort(() => Math.random() - 0.5),
+//         ...moderateExps.sort(() => Math.random() - 0.5),
+//         ...nearbyExps.sort(() => Math.random() - 0.5),
+//         ...nullExps.sort(() => Math.random() - 0.5)
+//       ];
+      
+//       console.log(`🌍 Prioritizing with full variety and exploration (far preference - all distances included)`);
+//     } else {
+//       sortedExperiences = sortedExperiences.sort(() => Math.random() - 0.5);
+//       console.log(`🎲 Using random shuffle (default behavior)`);
+//     }
+    
+//     // Adjust experiences per day if it's today and we're starting late
+//     let adjustedExperiencesPerDay = experiencesPerDay;
+//     if (isToday) {
+//       // If it's already past 3 PM, maybe reduce the number of activities
+//       const currentHour = currentDateTime.hour();
+//       if (currentHour >= 15) {
+//         adjustedExperiencesPerDay = Math.max(1, Math.floor(experiencesPerDay / 2));
+//         console.log(`🌅 Reducing activities to ${adjustedExperiencesPerDay} since it's already ${currentHour}:00`);
+//       }
+//     }
+    
+//     // Schedule experiences with conflict detection
+//     let scheduledCount = 0;
+//     let attemptCount = 0;
+//     const maxAttempts = sortedExperiences.length;
+    
+//     while (scheduledCount < adjustedExperiencesPerDay && attemptCount < maxAttempts) {
+//       const experience = sortedExperiences[attemptCount];
+      
+//       if (!experience) {
+//         break;
+//       }
+      
+//       // Find a non-conflicting time slot for this experience
+//       const nonConflictingSlot = findNonConflictingSlot(
+//         experience.availableTimeSlots, 
+//         scheduledSlotsForDay
+//       );
+      
+//       if (nonConflictingSlot) {
+//         // Create detailed auto_note including travel distance context
+//         const distanceInfo = experience.distance_from_city_center 
+//           ? `${experience.distance_from_city_center}km from center`
+//           : 'distance unknown';
+        
+//         const autoNote = `${experience.title} - ${dayOfWeek} at ${nonConflictingSlot.start_time}`;
+        
+//         // Add to itinerary
+//         const itineraryItem = {
+//           experience_id: experience.experience_id,
+//           day_number: day,
+//           start_time: nonConflictingSlot.start_time,
+//           end_time: nonConflictingSlot.end_time,
+//           auto_note: autoNote
+//         };
+        
+//         itinerary.push(itineraryItem);
+//         scheduledSlotsForDay.push(nonConflictingSlot);
+//         scheduledCount++;
+        
+//         console.log(`➕ Added: ${experience.title} (${distanceInfo}) on day ${day} from ${nonConflictingSlot.start_time} to ${nonConflictingSlot.end_time}`);
+//       } else {
+//         console.log(`⚠️ Skipping ${experience.title} - no non-conflicting time slot available`);
+//       }
+      
+//       attemptCount++;
+//     }
+    
+//     if (scheduledCount < adjustedExperiencesPerDay) {
+//       console.log(`⚠️ Warning: Only scheduled ${scheduledCount}/${adjustedExperiencesPerDay} experiences for day ${day} due to ${isToday ? 'current time constraints and ' : ''}time conflicts`);
+//     }
+    
+//   }
+  
+//   // Sort itinerary by day and time
+//   itinerary.sort((a, b) => {
+//     if (a.day_number !== b.day_number) {
+//       return a.day_number - b.day_number;
+//     }
+//     return a.start_time.localeCompare(b.start_time);
+//   });
+  
+//   console.log(`🎉 Generated conflict-free itinerary with inclusive ${travel_distance} travel distance preference: ${itinerary.length} experiences total`);
+  
+//   return itinerary;
+// };
 const smartItineraryGeneration = async ({
   experiences,
   totalDays,
-  experience_types,
   explore_time,
-  travel_companion,
   activity_intensity,
   travel_distance,
   start_date
 }) => {
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const itinerary = [];
-  
-  // Determine experiences per day based on activity intensity
-  const experiencesPerDay = {
-    'low': 2,
-    'moderate': 3,
-    'high': 4
-  }[activity_intensity.toLowerCase()] || 2;
 
-  // Parse start date to get day of week for each day
+  // Determine experiences per day based on activity intensity
+  const experiencesPerDayMap = { low: 2, moderate: 3, high: 4 };
+  const experiencesPerDay = experiencesPerDayMap[activity_intensity.toLowerCase()] || 2;
+
   const startDate = dayjs(start_date);
-  const currentDateTime = dayjs(); // Get current date and time
-  const currentTimeStr = currentDateTime.format('HH:mm'); // Current time in HH:mm format
-  
-  console.log(`🗺️ Starting itinerary generation with inclusive ${travel_distance} travel distance preference`);
+  const currentDateTime = dayjs();
+  const currentTimeStr = currentDateTime.format('HH:mm');
+
+  console.log(`🗺️ Starting itinerary generation for ${totalDays} day(s) with ${travel_distance} travel distance preference`);
   console.log(`📊 Total experiences available: ${experiences.length}`);
   console.log(`⏰ Current time: ${currentTimeStr}`);
-  
+
   for (let day = 1; day <= totalDays; day++) {
     const currentDate = startDate.add(day - 1, 'day');
     const dayOfWeek = dayNames[currentDate.day()];
-    
-    // Check if this is today
     const isToday = currentDate.isSame(currentDateTime, 'day');
-    
-    console.log(`📅 Planning day ${day} (${dayOfWeek}) with ${travel_distance} travel distance preference`);
-    if (isToday) {
-      console.log(`📍 This is TODAY - will only schedule activities after ${currentTimeStr}`);
-    }
-    
-    // Keep track of scheduled time slots for this day to avoid conflicts
+
+    console.log(`\n📅 Planning day ${day} (${dayOfWeek})`);
+
+    // Track scheduled slots for the day
     const scheduledSlotsForDay = [];
-    
-    // Filter experiences available on this day of week with their time slots
-    const availableExperiences = [];
-    
-    for (const experience of experiences) {
-      const timeSlots = await getExperienceWithAvailability(experience.experience_id, dayOfWeek);
-      
-      if (timeSlots.length > 0) {
-        // Filter time slots based on explore_time preference AND current time if today
-        const filteredTimeSlots = timeSlots.filter(slot => {
-          const startHour = parseInt(slot.start_time.split(':')[0]);
-          
-          // First, check if this time slot has already passed today
-          if (isToday) {
-            // Compare time strings (HH:mm format)
-            if (slot.start_time <= currentTimeStr) {
-              console.log(`⏭️ Skipping ${slot.start_time} - ${slot.end_time} as it's already past current time ${currentTimeStr}`);
-              return false;
-            }
-          }
-          
-          // Then apply explore_time preference
-          switch (explore_time) {
-            case 'Daytime':
-              return startHour >= 6 && startHour < 18;
-            case 'Nighttime':
-              return startHour >= 18 || startHour < 6;
-            case 'Both':
-            default:
-              return true;
-          }
-        });
-        
-        if (filteredTimeSlots.length > 0) {
-          availableExperiences.push({
-            ...experience,
-            availableTimeSlots: filteredTimeSlots
-          });
-        }
-      }
-    }
-    
-    console.log(`✅ Available experiences for ${dayOfWeek}: ${availableExperiences.length}`);
-    if (isToday) {
-      console.log(`🕐 (Filtered to only include activities after ${currentTimeStr})`);
-    }
-    
-    // Select experiences for this day (avoid duplicates across days)
     const usedExperienceIds = itinerary.map(item => item.experience_id);
-    const unusedExperiences = availableExperiences.filter(
-      exp => !usedExperienceIds.includes(exp.experience_id)
-    );
-    
-    console.log(`🔄 Unused experiences for day ${day}: ${unusedExperiences.length}`);
-    
-    // Apply travel distance-based sorting/prioritization - INCLUSIVE APPROACH
-    let sortedExperiences = [...unusedExperiences];
-    
+
+    // Filter experiences available today and not used on other days
+    const availableExperiences = [];
+
+    for (const experience of experiences) {
+      if (usedExperienceIds.includes(experience.experience_id)) continue;
+
+      const timeSlots = await getExperienceWithAvailability(experience.experience_id, dayOfWeek);
+
+      const filteredTimeSlots = timeSlots.filter(slot => {
+        const startHour = parseInt(slot.start_time.split(':')[0]);
+
+        // Skip past slots if today
+        if (isToday && slot.start_time <= currentTimeStr) return false;
+
+        // Filter by explore_time
+        switch (explore_time) {
+          case 'Daytime': return startHour >= 6 && startHour < 18;
+          case 'Nighttime': return startHour >= 18 || startHour < 6;
+          case 'Both': default: return true;
+        }
+      });
+
+      if (filteredTimeSlots.length > 0) {
+        availableExperiences.push({
+          ...experience,
+          availableTimeSlots: filteredTimeSlots
+        });
+      }
+    }
+
+    console.log(`✅ Available experiences for ${dayOfWeek}: ${availableExperiences.length}`);
+
+    // Apply travel distance prioritization
+    let sortedExperiences = [...availableExperiences];
     if (travel_distance === 'nearby') {
-      sortedExperiences.sort((a, b) => {
-        const aDistance = parseFloat(a.distance_from_city_center) || 0;
-        const bDistance = parseFloat(b.distance_from_city_center) || 0;
-        return aDistance - bDistance;
-      });
-      console.log(`🎯 Prioritizing by shortest distances first (nearby preference - targeting ≤10km experiences)`);
-      
+      sortedExperiences.sort((a, b) => (parseFloat(a.distance_from_city_center) || 0) - (parseFloat(b.distance_from_city_center) || 0));
     } else if (travel_distance === 'moderate') {
-      sortedExperiences.sort((a, b) => {
-        const aDistance = parseFloat(a.distance_from_city_center) || 0;
-        const bDistance = parseFloat(b.distance_from_city_center) || 0;
-        const randomFactor = (Math.random() - 0.5) * 3;
-        return (aDistance - bDistance) + randomFactor;
-      });
-      console.log(`⚖️ Prioritizing with balanced mix (moderate preference - targeting ≤20km with variety)`);
-      
+      sortedExperiences.sort((a, b) => ((parseFloat(a.distance_from_city_center) || 0) - (parseFloat(b.distance_from_city_center) || 0)) + (Math.random() - 0.5) * 3);
     } else if (travel_distance === 'far') {
-      const nearbyExps = sortedExperiences.filter(exp => (parseFloat(exp.distance_from_city_center) || 0) <= 10);
-      const moderateExps = sortedExperiences.filter(exp => {
-        const dist = parseFloat(exp.distance_from_city_center) || 0;
-        return dist > 10 && dist <= 20;
-      });
-      const farExps = sortedExperiences.filter(exp => (parseFloat(exp.distance_from_city_center) || 0) > 20);
-      const nullExps = sortedExperiences.filter(exp => !exp.distance_from_city_center);
-      
-      sortedExperiences = [
-        ...farExps.sort(() => Math.random() - 0.5),
-        ...moderateExps.sort(() => Math.random() - 0.5),
-        ...nearbyExps.sort(() => Math.random() - 0.5),
-        ...nullExps.sort(() => Math.random() - 0.5)
-      ];
-      
-      console.log(`🌍 Prioritizing with full variety and exploration (far preference - all distances included)`);
+      const nearby = sortedExperiences.filter(e => (parseFloat(e.distance_from_city_center) || 0) <= 10);
+      const moderate = sortedExperiences.filter(e => (parseFloat(e.distance_from_city_center) || 0) > 10 && (parseFloat(e.distance_from_city_center) || 0) <= 20);
+      const far = sortedExperiences.filter(e => (parseFloat(e.distance_from_city_center) || 0) > 20);
+      const unknown = sortedExperiences.filter(e => !e.distance_from_city_center);
+      sortedExperiences = [...far.sort(() => Math.random() - 0.5), ...moderate.sort(() => Math.random() - 0.5), ...nearby.sort(() => Math.random() - 0.5), ...unknown.sort(() => Math.random() - 0.5)];
     } else {
-      sortedExperiences = sortedExperiences.sort(() => Math.random() - 0.5);
-      console.log(`🎲 Using random shuffle (default behavior)`);
+      sortedExperiences.sort(() => Math.random() - 0.5);
     }
-    
-    // Adjust experiences per day if it's today and we're starting late
+
+    // Adjust experiences per day if today and starting late
     let adjustedExperiencesPerDay = experiencesPerDay;
-    if (isToday) {
-      // If it's already past 3 PM, maybe reduce the number of activities
-      const currentHour = currentDateTime.hour();
-      if (currentHour >= 15) {
-        adjustedExperiencesPerDay = Math.max(1, Math.floor(experiencesPerDay / 2));
-        console.log(`🌅 Reducing activities to ${adjustedExperiencesPerDay} since it's already ${currentHour}:00`);
-      }
+    if (isToday && currentDateTime.hour() >= 15) {
+      adjustedExperiencesPerDay = Math.max(1, Math.floor(experiencesPerDay / 2));
+      console.log(`🌅 Reducing activities to ${adjustedExperiencesPerDay} because it's past 3 PM`);
     }
-    
-    // Schedule experiences with conflict detection
+
+    // Schedule experiences for the day
     let scheduledCount = 0;
-    let attemptCount = 0;
-    const maxAttempts = sortedExperiences.length;
-    
-    while (scheduledCount < adjustedExperiencesPerDay && attemptCount < maxAttempts) {
-      const experience = sortedExperiences[attemptCount];
-      
-      if (!experience) {
-        break;
-      }
-      
-      // Find a non-conflicting time slot for this experience
-      const nonConflictingSlot = findNonConflictingSlot(
-        experience.availableTimeSlots, 
-        scheduledSlotsForDay
-      );
-      
-      if (nonConflictingSlot) {
-        // Create detailed auto_note including travel distance context
-        const distanceInfo = experience.distance_from_city_center 
-          ? `${experience.distance_from_city_center}km from center`
-          : 'distance unknown';
-        
-        const autoNote = `${experience.title} - ${dayOfWeek} at ${nonConflictingSlot.start_time}`;
-        
-        // Add to itinerary
-        const itineraryItem = {
+    for (const experience of sortedExperiences) {
+      if (scheduledCount >= adjustedExperiencesPerDay) break;
+
+      const slot = findNonConflictingSlot(experience.availableTimeSlots, scheduledSlotsForDay);
+      if (slot) {
+        itinerary.push({
           experience_id: experience.experience_id,
           day_number: day,
-          start_time: nonConflictingSlot.start_time,
-          end_time: nonConflictingSlot.end_time,
-          auto_note: autoNote
-        };
-        
-        itinerary.push(itineraryItem);
-        scheduledSlotsForDay.push(nonConflictingSlot);
+          start_time: slot.start_time,
+          end_time: slot.end_time,
+          auto_note: `${experience.title} - ${dayOfWeek} at ${slot.start_time}`
+        });
+
+        scheduledSlotsForDay.push(slot);
         scheduledCount++;
-        
-        console.log(`➕ Added: ${experience.title} (${distanceInfo}) on day ${day} from ${nonConflictingSlot.start_time} to ${nonConflictingSlot.end_time}`);
-      } else {
-        console.log(`⚠️ Skipping ${experience.title} - no non-conflicting time slot available`);
+        console.log(`➕ Scheduled: ${experience.title} (${slot.start_time} - ${slot.end_time})`);
       }
-      
-      attemptCount++;
     }
-    
-    if (scheduledCount < adjustedExperiencesPerDay) {
-      console.log(`⚠️ Warning: Only scheduled ${scheduledCount}/${adjustedExperiencesPerDay} experiences for day ${day} due to ${isToday ? 'current time constraints and ' : ''}time conflicts`);
+
+    // Fallback: insert 1 unused experience if day ends empty
+    if (scheduledCount === 0 && availableExperiences.length > 0) {
+      const fallback = availableExperiences[0];
+      const fallbackSlot = fallback.availableTimeSlots[0];
+      if (fallbackSlot) {
+        itinerary.push({
+          experience_id: fallback.experience_id,
+          day_number: day,
+          start_time: fallbackSlot.start_time,
+          end_time: fallbackSlot.end_time,
+          auto_note: `${fallback.title} - fallback activity`
+        });
+        console.log(`⚠️ Fallback added for day ${day}: ${fallback.title}`);
+      }
     }
   }
-  
-  // Sort itinerary by day and time
-  itinerary.sort((a, b) => {
-    if (a.day_number !== b.day_number) {
-      return a.day_number - b.day_number;
-    }
-    return a.start_time.localeCompare(b.start_time);
-  });
-  
-  console.log(`🎉 Generated conflict-free itinerary with inclusive ${travel_distance} travel distance preference: ${itinerary.length} experiences total`);
-  
+
+  // Sort final itinerary by day & time
+  itinerary.sort((a, b) => a.day_number - b.day_number || a.start_time.localeCompare(b.start_time));
+
+  console.log(`🎉 Generated itinerary with ${itinerary.length} experiences`);
   return itinerary;
 };
 
+
+function getOrdinalSuffix(num) {
+  const lastDigit = num % 10;
+  const lastTwoDigits = num % 100;
+  
+  if (lastTwoDigits >= 11 && lastTwoDigits <= 13) {
+    return 'th';
+  }
+  
+  switch (lastDigit) {
+    case 1: return 'st';
+    case 2: return 'nd';
+    case 3: return 'rd';
+    default: return 'th';
+  }
+}
 
 // Helper function to get diagnostic information
 const getDiagnosticInfo = async ({
