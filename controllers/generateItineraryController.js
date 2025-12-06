@@ -434,7 +434,7 @@ const saveItinerary = async (req, res) => {
         title, 
         notes || 'Auto-generated itinerary', 
         dayjs().format('YYYY-MM-DD HH:mm:ss'), 
-        'upcoming'
+        'pending'
       ]
     );
 
@@ -442,7 +442,7 @@ const saveItinerary = async (req, res) => {
 
     // --- Step 1.5: Insert itinerary payment record ---
     // Calculate total amount from items (assuming each item has a price)
-    const totalAmount = items.reduce((sum, item) => sum + (item.price || 0), 0);
+const totalAmount = items.reduce((sum, item) => sum + parseFloat(item.price || 0), 0);
 
     await db.query(
       `INSERT INTO itinerary_payments 

@@ -845,6 +845,19 @@ const getItineraryById = async (req, res) => {
        ORDER BY ii.day_number, ii.start_time`,
       [itinerary_id]
     );
+    // Fetch payments for the itinerary
+const [payments] = await db.query(
+  `SELECT payment_id, itinerary_id, total_amount, amount_paid, payment_status, created_at, updated_at
+   FROM itinerary_payments
+   WHERE itinerary_id = ?`,
+  [itinerary_id]
+);
+
+const formattedPayments = payments.map(payment => ({
+  ...payment,
+  created_at: dayjs(payment.created_at).format('YYYY-MM-DD HH:mm:ss'),
+  updated_at: dayjs(payment.updated_at).format('YYYY-MM-DD HH:mm:ss')
+}));
 
     // Fetch images for each experience in the items
     const itemsWithImages = await Promise.all(
@@ -904,12 +917,13 @@ const getItineraryById = async (req, res) => {
 
     // 🆕 Include current activity info in response
     const response = { 
-      itinerary: detailedItinerary
+      itinerary: detailedItinerary,
+       payments: formattedPayments
     };
     
-    if (itineraryWithStatus.currentActivityInfo) {
-      response.currentActivity = itineraryWithStatus.currentActivityInfo;
-    }
+if (itineraryWithStatus.currentActivityInfo) {
+  response.currentActivity = itineraryWithStatus.currentActivityInfo;
+}
 
     res.status(200).json(response);
   } catch (err) {
@@ -1131,6 +1145,15 @@ const getItineraryItemById = async (req, res) => {
       error: 'Server error', 
       message: err.message 
     });
+const payments = paymentRows.map(payment => ({
+  ...payment,
+  total_amount: parseFloat(payment.total_amount),
+  amount_paid: parseFloat(payment.amount_paid),
+  created_at: dayjs(payment.created_at).format('YYYY-MM-DD HH:mm:ss'),
+  updated_at: dayjs(payment.updated_at).format('YYYY-MM-DD HH:mm:ss')
+}));
+
+
   }
 };
 
